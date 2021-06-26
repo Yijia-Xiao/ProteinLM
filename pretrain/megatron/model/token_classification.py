@@ -14,6 +14,17 @@ from megatron.model.utils import scaled_init_method_normal
 from .module import MegatronModule
 
 
+def id_to_token(id):
+    # [PAD]
+    if id == 0:
+        return ''
+    # skip token 'J' (not in IUPAC vocab)
+    if id <= 14:
+        return chr(id + 65 - 6)
+    else:
+        return chr(id + 65 - 5)
+
+
 class TokenClassificationBase(MegatronModule):
 
     def __init__(self, num_classes, num_tokentypes=2):
@@ -55,6 +66,31 @@ class TokenClassificationBase(MegatronModule):
         else:
             args = [model_input, extended_attention_mask]
         lm_output = self.language_model(*args, **kwargs)
+
+        from megatron import get_args
+        args = get_args()
+
+        if args.task == 'protein_embed':
+            import sys
+            import os
+            dir = os.path.join(os.getcwd(), 'tasks/protein')
+            sys.path.append(dir)
+            seq_text = ''
+            for token_id in model_input[0]:
+                seq_text += id_to_token(token_id)
+            pid = os.getpid()
+            os.system(f'mkdir -p /workspace/embed/{pid}')
+            if not os.path.isfile(f'/workspace/embed/{pid}/index.txt'):
+                idx = 0
+                os.system(f'echo {idx} > /workspace/embed/{pid}/index.txt')
+                torch.save([model_input, seq_text[1:], lm_output], f'/workspace/embed/{pid}/{idx}.pt')
+            else:
+                with open(f'/workspace/embed/{pid}/index.txt', 'r') as f:
+                    index = int(f.readline().strip()) + 1
+                torch.save([model_input, seq_text[1:], lm_output], f'/workspace/embed/{pid}/{index}.pt')
+                with open(f'/workspace/embed/{pid}/index.txt', 'w') as f:
+                    f.write(str(index))
+
         if mpu.is_pipeline_last_stage():
             classification_logits = self.classification_head(lm_output)
 

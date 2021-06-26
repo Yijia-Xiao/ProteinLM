@@ -273,6 +273,12 @@ def main():
         def name_from_datapath(datapath):
             return 'fluorescence'
         protein_regression(num_classes, Dataset, name_from_datapath)
+    elif args.task == 'protein_embed':
+        num_classes = 3 # reuse secondary structure
+        from tasks.protein.protein_embed import ProteinEmbedDataset as Dataset
+        def name_from_datapath(datapath):
+            return 'protein_embed'
+        amino_acid_classification(num_classes, Dataset, name_from_datapath)
  
     else:
         raise NotImplementedError('Protein task {} is not implemented.'.format(

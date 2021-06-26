@@ -68,6 +68,8 @@ if __name__ == '__main__':
     # regression tasks
     elif args.task in ['stability', 'fluorescence']:
         from protein.finetune import main
+    elif args.task in ['protein_embed']:
+        from protein.finetune import main
     else:
         raise NotImplementedError('Task {} is not implemented.'.format(
             args.task))

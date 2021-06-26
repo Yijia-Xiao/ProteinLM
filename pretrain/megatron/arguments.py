@@ -536,6 +536,8 @@ def _add_data_args(parser):
                        help='Probability of producing a short sequence.')
     group.add_argument('--mmap-warmup', action='store_true',
                        help='Warm up mmap files.')
+    # for embedding task, if you want the dataloader to dump name-seq mapping, you will
+    # need to change num_workers to 1, to avoid IO conflict.
     group.add_argument('--num-workers', type=int, default=2,
                        help="Dataloader number of workers.")
     group.add_argument('--tokenizer-type', type=str,
