@@ -23,7 +23,6 @@ from megatron import get_args, get_tokenizer
 from megatron import print_rank_0
 from megatron import get_timers
 from megatron import mpu
-# from megatron.data.tape_dataset import build_train_valid_test_datasets
 from megatron.data.msa_dataset import build_train_valid_test_datasets
 from megatron.model import BertModel, BertModelFirstStage, BertModelIntermediateStage, BertModelLastStage
 from megatron.training import pretrain
@@ -346,7 +345,6 @@ def train_valid_test_datasets_provider(train_val_test_num_samples):
 if __name__ == "__main__":
     print('starting')
     import os
-    # os.system('rm -rf /dataset/f0a0efb9/protein/msa/protein-msa/pretrain/ckpt/hidden-32-layer-2-head-2-bs-4-mp-1/')
 
     pretrain(train_valid_test_datasets_provider, model_provider, forward_step,
              args_defaults={'tokenizer_type': 'BertWordPieceLowerCase'})

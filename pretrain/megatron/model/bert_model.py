@@ -60,7 +60,6 @@ def bert_position_ids(token_ids):
 
 class BertLMHead(MegatronModule):
     """Masked LM head for Bert
-
     Arguments:
         mpu_vocab_size: model parallel size of vocabulary.
         hidden_size: hidden size
@@ -122,12 +121,16 @@ def post_language_model_processing(lm_output, pooled_output,
             assert lm_logits.dtype == torch.half
             lm_loss = mpu.vocab_parallel_cross_entropy(lm_logits, lm_labels)
         else:
+            # jiezhong
+            # print(lm_labels)
+            # print(lm_labels.shape, lm_labels.dtype)
             lm_loss = mpu.vocab_parallel_cross_entropy(lm_logits.float(),
                                                        lm_labels)
         return lm_loss, binary_logits
 
 
 class BertModelBase(MegatronModule):
+
     """Bert Language model."""
 
     def __init__(self, num_tokentypes=2, add_binary_head=True,
@@ -164,8 +167,22 @@ class BertModelBase(MegatronModule):
 
     def forward(self, bert_model_input, attention_mask,
                 tokentype_ids=None, lm_labels=None, position_ids=None):
+        # jiezhong
+        # print('bert_model_input, attention_mask, position_ids', bert_model_input, attention_mask, position_ids)
+        # for i in [bert_model_input, attention_mask, position_ids]:
+        #     print(i.shape)
 
-        extended_attention_mask = bert_extended_attention_mask(attention_mask) if attention_mask.dim() == 2 else attention_mask
+        # print('attn mask shape, bert input shape', attention_mask.shape, bert_model_input.shape)
+        # reduce dim
+        attention_mask = attention_mask.squeeze(0).squeeze(0)
+        # print(attention_mask.shape)
+        
+
+        # print('bert input shape', bert_model_input.shape)
+
+        assert (attention_mask.dim() == 2)
+        extended_attention_mask = bert_extended_attention_mask(attention_mask) \
+            if attention_mask.dim() == 2 else attention_mask
 
         kwargs = {}
         if mpu.is_pipeline_first_stage():

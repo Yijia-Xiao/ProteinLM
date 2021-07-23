@@ -86,6 +86,7 @@ def initialize_megatron(extra_args_provider=None, args_defaults={},
             if torch.distributed.get_rank() == 0:
                 from megatron.data.dataset_utils import compile_helper
                 compile_helper()
+                print('compiling')
             # Simple barrier
             torch.distributed.barrier()
         

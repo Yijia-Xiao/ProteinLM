@@ -93,10 +93,15 @@ def _parse_args(extra_args_provider=None, defaults={},
                 ignore_unknown_args=False):
     """Parse entire arguments."""
     global _GLOBAL_ARGS
+    import time
+    start = time.time()
     _ensure_var_is_not_initialized(_GLOBAL_ARGS, 'args')
+    mid = time.time()
     _GLOBAL_ARGS = parse_args(extra_args_provider=extra_args_provider,
                               defaults=defaults,
                               ignore_unknown_args=ignore_unknown_args)
+    end = time.time()
+    print('time', mid - start, end - mid)
     return _GLOBAL_ARGS
 
 

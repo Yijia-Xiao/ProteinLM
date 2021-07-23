@@ -9,3 +9,14 @@ dist/
 
 # helpers.so for data processing
 helpers.*.so
+data/
+examples/
+tb/
+protein_tools/*.bin
+protein_tools/*.idx
+protein_tools/*.json
+msa_tools/*.bin
+msa_tools/*.idx
+msa_tools/*.json
+ckpt/
+local_scripts/

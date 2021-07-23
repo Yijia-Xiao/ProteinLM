@@ -89,7 +89,7 @@ def get_batch(data_iterator):
         tokenizer.cls,
         reset_position_ids=True,
         reset_attention_mask=True)
-
+    attention_mask = attention_mask.squeeze(0).squeeze(0)
     return tokens, loss_mask, lm_labels, padding_mask, attention_mask, position_ids
 
 
@@ -103,8 +103,14 @@ def forward_step(data_iterator, model, input_tensor):
     tokens, loss_mask, lm_labels, padding_mask, attention_mask, position_ids \
         = get_batch(data_iterator)
     timers('batch-generator').stop()
+    print(attention_mask.shape)
 
     extended_attention_mask = bert_extended_attention_mask(padding_mask) + attention_mask
+    # print(extended_attention_mask.shape)
+    # debug
+    extended_attention_mask = attention_mask
+    # end debug
+    print('shape check')
 
     # Forward pass through the model.
     if mpu.is_pipeline_first_stage():
@@ -158,6 +164,6 @@ def train_valid_test_datasets_provider(train_val_test_num_samples):
 
 
 if __name__ == "__main__":
-
+    print('starting')
     pretrain(train_valid_test_datasets_provider, model_provider, forward_step,
              args_defaults={'tokenizer_type': 'BertWordPieceLowerCase'})
