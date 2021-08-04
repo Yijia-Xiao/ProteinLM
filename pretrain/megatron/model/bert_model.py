@@ -165,7 +165,7 @@ class BertModelBase(MegatronModule):
                                                     init_method)
                 self._binary_head_key = 'binary_head'
 
-    def forward(self, bert_model_input, attention_mask,
+    def forward(self, bert_model_input, row_attention_mask, col_attention_mask,
                 tokentype_ids=None, lm_labels=None, position_ids=None):
         # jiezhong
         # print('bert_model_input, attention_mask, position_ids', bert_model_input, attention_mask, position_ids)
@@ -173,26 +173,47 @@ class BertModelBase(MegatronModule):
         #     print(i.shape)
 
         # print('attn mask shape, bert input shape', attention_mask.shape, bert_model_input.shape)
+        # print('bert_model_input', bert_model_input[0])
+        # print('row_attention_mask', attention_mask.shape, attention_mask[0])
         # reduce dim
-        attention_mask = attention_mask.squeeze(0).squeeze(0)
-        # print(attention_mask.shape)
-        
 
-        # print('bert input shape', bert_model_input.shape)
+        # TODO: original msa code with squeeze; however, this doesn't apply to MSA with depth=1
+        # a = torch.tensor(
+        #     [
+        #         [1, 2, 3],
+        #         [4, 5, 6]
+        #     ]
+        # )
+        # a.squeeze(0).shape
+        # torch.Size([2, 3])
 
-        assert (attention_mask.dim() == 2)
-        extended_attention_mask = bert_extended_attention_mask(attention_mask) \
-            if attention_mask.dim() == 2 else attention_mask
+        # b = torch.tensor(
+        #     [
+        #         [1, 2, 3],
+        #     ]
+        # )
+        # b.squeeze(0).shape
+        # torch.Size([3])
+
+        # TODO: check attention mask and extended
+        assert (row_attention_mask.dim() == 2)
+        """
+        row_extended_attention_mask = bert_extended_attention_mask(row_attention_mask) \
+            if row_attention_mask.dim() == 2 else row_attention_mask
+        assert (col_attention_mask.dim() == 2)
+        col_extended_attention_mask = bert_extended_attention_mask(col_attention_mask) \
+            if col_attention_mask.dim() == 2 else col_attention_mask
+        """
 
         kwargs = {}
         if mpu.is_pipeline_first_stage():
             input_ids = bert_model_input
             if position_ids is None:
                 position_ids = bert_position_ids(input_ids)
-            args = [input_ids, position_ids, extended_attention_mask]
+            args = [input_ids, position_ids, row_attention_mask, col_attention_mask]
             kwargs['tokentype_ids'] = tokentype_ids
         else:
-            args = [bert_model_input, extended_attention_mask]
+            args = [bert_model_input, row_attention_mask, col_attention_mask]
         lm_output = self.language_model(*args, **kwargs)
         if mpu.is_pipeline_last_stage() and self.add_binary_head:
             lm_output, pooled_output = lm_output
@@ -257,11 +278,11 @@ class BertModel(BertModelBase):
             add_binary_head=add_binary_head,
             parallel_output=parallel_output)
 
-    def forward(self, input_ids, attention_mask,
+    def forward(self, input_ids, row_attention_mask, col_attention_mask,
                 tokentype_ids=None, lm_labels=None, position_ids=None):
         return super(BertModel, self).forward(
             input_ids,
-            attention_mask,
+            row_attention_mask, col_attention_mask,
             tokentype_ids=tokentype_ids,
             lm_labels=lm_labels,
             position_ids=position_ids)
@@ -273,11 +294,11 @@ class BertModelFirstStage(BertModelBase):
         super(BertModelFirstStage, self).__init__(
             num_tokentypes=num_tokentypes)
 
-    def forward(self, input_ids, attention_mask,
+    def forward(self, input_ids,  row_attention_mask, col_attention_mask,
                 tokentype_ids=None, position_ids=None):
         return super(BertModelFirstStage, self).forward(
             input_ids,
-            attention_mask,
+            row_attention_mask, col_attention_mask,
             tokentype_ids=tokentype_ids,
             position_ids=position_ids)
 

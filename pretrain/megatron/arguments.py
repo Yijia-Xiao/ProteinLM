@@ -26,7 +26,7 @@ def parse_args(extra_args_provider=None, defaults={},
     """Parse all arguments."""
     parser = argparse.ArgumentParser(description='Megatron-LM Arguments',
                                      allow_abbrev=False)
-    print('PARRRRRSE')
+    # print('PARRRRRSE')
 
     # Standard arguments.
     parser = _add_network_size_args(parser)
@@ -183,41 +183,20 @@ def parse_args(extra_args_provider=None, defaults={},
         assert args.checkpoint_activations, \
             'for distribute-checkpointed-activations to work you '\
             'need to enable checkpoint-activations'
-    import time
-    start = time.time()
-    print('start' * 10)
+
     if args.scaled_masked_softmax_fusion:
-        print('A' * 10)
         if args.scaled_upper_triang_masked_softmax_fusion:
-            print('B' * 10)
-            time1 = time.time()
             fused_kernels.load_scaled_upper_triang_masked_softmax_fusion_kernel()
-            print('time1 ', time1 - start)
         else:
-            print('C' * 10)
-            time2 = time.time()
-            # TODO restore compile
             fused_kernels.load_scaled_masked_softmax_fusion_kernel()
-            print('time2 ', time2 - start)
-            #print('skipping fused_kernels.load_scaled_masked_softmax_fusion_kernel()')
-            #print('skipping building...')
     else:
-        print('D' * 10)
-        # print('else')
-        time3 = time.time()
         # This argument will eventually go away, for now make sure it is off
         # if scaled_masked_softmax_fusion is off.
         args.scaled_upper_triang_masked_softmax_fusion = False
-        print('time3 ', time3 - start)
 
-    print('end' * 10)
     # Load mixed precision fused layer norm.
     if args.fp32_residual_connection:
-        time4 = time.time()
-        print('E' * 10)
         fused_kernels.load_fused_mix_prec_layer_norm_kernel()
-        print('time4 ', time4 - start)
-    print('DONE' * 10)
 
     _print_args(args)
     return args
@@ -580,6 +559,8 @@ def _add_data_args(parser):
                        help="Maximum MSA depth to process.")
     group.add_argument('--msa-length', type=int, default=512,
                        help="Maximum MSA length to process.")
+    group.add_argument('--msa-shuffle', type=int, default=1,
+                       help="Whether shuffle MSA, 1 for shuffle, 0 for no shuffle")
 
     return parser
 

@@ -311,7 +311,7 @@ class TransformerLanguageModelBase(MegatronModule):
             self.pooler = Pooler(self.hidden_size, self.init_method)
             self._pooler_key = 'pooler'
 
-    def forward(self, language_model_input, attention_mask,
+    def forward(self, language_model_input,  row_attention_mask, col_attention_mask,
                 tokentype_ids=None, layer_past=None, get_key_value=False,
                 pooling_sequence_index=0):
 
@@ -326,7 +326,7 @@ class TransformerLanguageModelBase(MegatronModule):
 
         # Transformer.
         transformer_output = self.transformer(transformer_input,
-                                              attention_mask,
+                                              row_attention_mask, col_attention_mask,
                                               layer_past=layer_past,
                                               get_key_value=get_key_value)
 
@@ -409,12 +409,13 @@ class TransformerLanguageModel(TransformerLanguageModelBase):
             num_tokentypes=num_tokentypes,
             add_pooler=add_pooler)
 
-    def forward(self, input_ids, position_ids, attention_mask,
+    def forward(self, input_ids, position_ids, row_attention_mask, col_attention_mask,
                 tokentype_ids=None, layer_past=None, get_key_value=False,
                 pooling_sequence_index=0):
         return super(TransformerLanguageModel, self).forward(
             (input_ids, position_ids),
-            attention_mask,
+            # attention_mask,
+            row_attention_mask, col_attention_mask,
             tokentype_ids=tokentype_ids,
             layer_past=layer_past,
             get_key_value=get_key_value,
@@ -438,11 +439,11 @@ class TransformerLanguageModelFirstStage(TransformerLanguageModelBase):
             output_layer_init_method,
             num_tokentypes=num_tokentypes)
 
-    def forward(self, input_ids, position_ids, attention_mask,
+    def forward(self, input_ids, position_ids, row_attention_mask, col_attention_mask,
                 tokentype_ids=None, layer_past=None, get_key_value=False):
         return super(TransformerLanguageModelFirstStage, self).forward(
             (input_ids, position_ids),
-            attention_mask,
+            row_attention_mask, col_attention_mask,
             tokentype_ids=tokentype_ids,
             layer_past=layer_past,
             get_key_value=get_key_value
@@ -463,11 +464,12 @@ class TransformerLanguageModelIntermediateStage(TransformerLanguageModelBase):
             init_method,
             output_layer_init_method)
 
-    def forward(self, hidden_states, attention_mask,
+    def forward(self, hidden_states, row_attention_mask, col_attention_mask,
                 layer_past=None, get_key_value=False):
         return super(TransformerLanguageModelIntermediateStage, self).forward(
             hidden_states,
-            attention_mask,
+            # attention_mask,
+            row_attention_mask, col_attention_mask,
             layer_past=layer_past,
             get_key_value=get_key_value
         )

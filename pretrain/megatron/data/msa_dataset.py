@@ -19,9 +19,10 @@ import os
 import time
 
 import numpy as np
+import numpy.random
 import torch
 
-
+from megatron import get_args
 from megatron import get_tokenizer
 from megatron import mpu, print_rank_0
 from megatron.data.blendable_dataset import BlendableDataset
@@ -31,7 +32,9 @@ from megatron.data.indexed_dataset import make_dataset as make_indexed_dataset
 
 from megatron.data.gpt_dataset import _build_doc_idx, _build_shuffle_idx, _num_epochs, get_indexed_dataset_
 from megatron.data.dataset_utils import pad_and_convert_to_numpy
+from megatron.data.dataset_utils import msa_pad_and_convert_to_numpy
 from megatron.data.dataset_utils import create_masked_lm_predictions
+from megatron.data.dataset_utils import create_masked_msa_predictions
 
 
 def build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
@@ -216,15 +219,35 @@ def build_training_sample(sample,
 
     # assert len(sample) >= 1
     assert len(sample) == 1
+
+    args = get_args()
+    ARGS_MSA_DEPTH = args.msa_depth
+    ARGS_MSA_LENGTH = args.msa_length
+
     msa_length = sample[0].tolist().index(msa_sep_id)
     sample = np.delete(sample[:], [msa_length], axis=1)
     assert len(sample[0]) % msa_length == 0, 'MSA_TOTAL_LENGTH = MSA_DEPTH * MSA_LENGTH'
-
     msa_depth = len(sample[0]) // msa_length
 
+    # TODO depth-first or depth-first logic here
+    actual_msa_depth = min(msa_depth, ARGS_MSA_DEPTH)
+    actual_msa_length = min(msa_length, ARGS_MSA_LENGTH)
 
-    # print('MSA DEPTH, MSA_LENGTH, TOT_LENGTH', msa_depth, msa_length, len(sample[0]))
-    assert msa_depth * msa_length == len(sample[0]), 'msa_depth * msa_length == len(sample[0])'
+    uncropped_msa = sample[0].copy()
+    args = get_args()
+    msa_shuffle = True if args.msa_shuffle == 1 else False
+
+    if msa_shuffle:
+        # print("shuffling...")
+        uncropped_msa = uncropped_msa.reshape((msa_depth, msa_length))
+        msa_origin = uncropped_msa[0].reshape(msa_length)
+        msa_aligns = uncropped_msa[1:]
+        numpy.random.shuffle(msa_aligns)
+        msa_aligns = msa_aligns.reshape((msa_depth - 1, msa_length))
+        uncropped_msa = numpy.append(msa_origin, msa_aligns)
+
+    sample = [uncropped_msa[: actual_msa_depth * actual_msa_length]]
+    assert actual_msa_depth * actual_msa_length == len(sample[0]), 'actual_msa_depth * actual_msa_length == len(sample[0])'
 
     """
     truncated = False
@@ -233,37 +256,37 @@ def build_training_sample(sample,
         sample[0] = sample[0][:max_seq_length - 1]
         truncated = True
     """
-    max_msa_depth = (max_seq_length // msa_length)
-    if max_msa_depth < msa_depth:
-        msa_depth = max_msa_depth
-        uncropped_msa = sample[0].copy()
-        sample = [uncropped_msa[: msa_depth * msa_length]]
 
     # target_seq_length = sum([len(_)+1 for _ in sample])
     target_seq_length = sum([len(_) for _ in sample])
 
-    # print('target_len, msa_depth, msa_length', target_seq_length, msa_depth, msa_length)
-    assert target_seq_length == msa_depth * msa_length, 'target_seq_length == msa_depth, msa_length'
+    assert target_seq_length == actual_msa_depth * actual_msa_length, \
+        'target_seq_length == actual_msa_depth * actual_msa_length'
 
+    # print('target_seq_length, max_seq_length', target_seq_length, max_seq_length)
     assert target_seq_length <= max_seq_length
 
     max_num_tokens = target_seq_length
 
     # Build tokens and toketypes.
-    tokens = []
+    # tokens = []
     tokentypes = [0] * target_seq_length
     # for s in sample:
     #     tokens.append(cls_id)
     #     tokens += s.tolist()
 
     truncated = False
-    for s in sample:
-        # NOTE: remove [CLS] append
-        # tokens.append(cls_id)
-        tokens += s.tolist()
-        # print('concatenating... cls token', s.tolist())
+    # for s in sample:
+    #     # NOTE: remove [CLS] append
+    #     # tokens.append(cls_id)
+    #     tokens += s.tolist()
+    #     # print('concatenating... cls token', s.tolist())
+    tokens = sample[0].tolist()
+
+    assert len(tokens) == actual_msa_depth * actual_msa_length, 'len(tokens) == actual_msa_depth * actual_msa_length'
 
     # Masking.
+    # ori_tokens = tokens
     max_predictions_per_seq = masked_lm_prob * max_num_tokens
     (tokens, masked_positions, masked_labels, _) = create_masked_lm_predictions(
         tokens, vocab_id_list, vocab_id_to_token_dict, masked_lm_prob,
@@ -272,8 +295,7 @@ def build_training_sample(sample,
     # Padding.
     tokens_np, tokentypes_np, labels_np, padding_mask_np, loss_mask_np \
         = pad_and_convert_to_numpy(tokens, tokentypes, masked_positions,
-                                   masked_labels, pad_id, max_seq_length)
-    # print(tokens_np, labels_np, labels_np.shape, tokens_np[msa_length: ], tokens_np[: msa_length])
+                                   masked_labels, pad_id, target_seq_length)
 
     train_sample = {
         'text': tokens_np,
@@ -283,10 +305,12 @@ def build_training_sample(sample,
         'loss_mask': loss_mask_np,
         'padding_mask': padding_mask_np,
         'truncated': int(truncated),
-        'msa_depth': msa_depth,
-        'msa_length': msa_length
+        'actual_msa_depth': actual_msa_depth,
+        'actual_msa_length': actual_msa_length
         }
 
+    assert len(train_sample['text']) == train_sample['actual_msa_depth'] * train_sample['actual_msa_length'], \
+        "len(train_sample['text']) == train_sample['actual_msa_depth'] * train_sample['actual_msa_length']"
     return train_sample
 
 

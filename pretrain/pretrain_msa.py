@@ -24,14 +24,16 @@ from megatron import print_rank_0
 from megatron import get_timers
 from megatron import mpu
 from megatron.data.msa_dataset import build_train_valid_test_datasets
+# from megatron.data.gpt_dataset import build_train_valid_test_datasets
 from megatron.model import BertModel, BertModelFirstStage, BertModelIntermediateStage, BertModelLastStage
 from megatron.training import pretrain
 from megatron.utils import average_losses_across_data_parallel_group
 from megatron.utils import get_tape_masks_and_position_ids
 from megatron.model.bert_model import bert_extended_attention_mask
+import torch.nn.functional as F
 
-SPLIT_TOKEN_ID = 32
-EOM_TOKEN_ID = 33
+# SPLIT_TOKEN_ID = 32
+# EOM_TOKEN_ID = 33
 
 # IS_FAKE = True
 IS_FAKE = False
@@ -43,7 +45,7 @@ def msa_preprocess(msa_string):
 def model_provider():
     """Build the model."""
 
-    print_rank_0('building TAPE model ...')
+    print_rank_0('building MSA model ...')
 
     args = get_args()
     if mpu.get_pipeline_model_parallel_world_size() > 1:
@@ -74,10 +76,7 @@ def get_batch(data_iterator):
     tokenizer = get_tokenizer()
     # Items and their type.
 
-    # keys = ['text', 'labels', 'loss_mask', 'padding_mask']
-    # NOTE: add msa_depth and msa_length
-    keys = ['text', 'labels', 'loss_mask', 'padding_mask']
-    # keys = ['text', 'labels', 'loss_mask', 'padding_mask', 'msa_depth', 'msa_length']
+    keys = ['text', 'labels', 'loss_mask', 'padding_mask', 'actual_msa_depth', 'actual_msa_length']
     datatype = torch.int64
 
     # Broadcast data.
@@ -85,39 +84,21 @@ def get_batch(data_iterator):
         data = next(data_iterator)
     else:
         data = None
-    # print(data_iterator)
-
     data_b = mpu.broadcast_data(keys, data, datatype)
-
-
-
 
     # start: fake tokens
     if IS_FAKE:
-        # Unpack.
         tokens = data_b['text'].long()
-        # print("tokens in pretrain msa")
-        # tokens = tokens[0]
-        # print(tokens, tokens.shape)
-        # print(tokens[:257], len(tokens[:257]))
-        # print(tokens[-513:], len(tokens[-513:]))
-        # print(data_b)
-
-        # TODO: I found that the sequences are concatenated, and seperated by [CLS]
-        # And I discussed with jiayun, this part data_iter should be modified
-
-        # print('tokens [CLS] count', sum(tokens[0] == tokenizer.cls))
-        # tokens[CLS] count tensor(51, device='cuda:0')
-
+        from megatron import get_args
         args = get_args()
         import random
-        # if random.randint(0 ,1) == 0:
-        if True:
+
+        if random.randint(0 ,1) == 0:
             msa_depth = args.msa_depth
             msa_length = args.msa_length
         else:
-            msa_depth = args.msa_depth * 2
-            msa_length = args.msa_length // 2
+            msa_depth = 8
+            msa_length = 32
 
         loss_mask = data_b['loss_mask'].float()
         lm_labels = data_b['labels'].long()
@@ -143,7 +124,7 @@ def get_batch(data_iterator):
             for j in range(1, len(tokens[0])):
                 if torch.rand(1).item() < 0.15:
                     masking_bool_mat[i][j] = True
-        # print('masked bool mat', masking_bool_mat)
+
         # masked bool mat
         # tensor([[False, False, False, ..., False, False, False],
         #         [False, False, False, ..., False, False, False],
@@ -152,7 +133,6 @@ def get_batch(data_iterator):
         #         [False, False, False, ..., False, False, False],
         #         [False, True, False, ..., False, False, False],
         #         [False, False, False, ..., False, False, False]])
-
         # print('masked ', sum(sum(masking_bool_mat.long())), ', total ', masking_bool_mat.numel()) # 2-dim, sum twice
         # masked tensor(2368), total 16384
 
@@ -160,11 +140,6 @@ def get_batch(data_iterator):
         lm_labels = -torch.ones(msa_shape).long()
         lm_labels[masking_bool_mat] = FAKE_TOKEN_ID
         padding_mask = torch.ones(tokens.shape)
-
-        # print(tokens)
-        # print(loss_mask)
-        # print(lm_labels)
-        # print(padding_mask)
 
         # Get the masks and position ids.
         attention_mask, position_ids = get_tape_masks_and_position_ids(
@@ -190,86 +165,60 @@ def get_batch(data_iterator):
         #         [0, 1, 2, ..., 509, 510, 511],
         #         [0, 1, 2, ..., 509, 510, 511],
         #         [0, 1, 2, ..., 509, 510, 511]])
-
-        # note, Change in batch, to fit model input, no longer support batch
-        # msa_shape = (-1, msa_depth, msa_length)
-        # tokens = tokens.reshape(msa_shape)
-        # loss_mask = loss_mask.reshape(msa_shape)
-        # loss_mask = loss_mask.reshape(msa_shape)
-        # lm_labels = lm_labels.reshape(msa_shape)
-        # padding_mask = padding_mask.reshape(msa_shape)
         device = tokens.device
-        # print('tokens.shape ', tokens.shape)
-        for it in [tokens, loss_mask, lm_labels, padding_mask, attention_mask, position_ids]:
-            print(it.shape)
-        
         return tokens.to(device), loss_mask.to(device), lm_labels.to(device), padding_mask.to(device), attention_mask.to(device), position_ids.to(device)
-        # return tokens, loss_mask, lm_labels, padding_mask, attention_mask, position_ids
+
     else:
         # Unpack.
         tokens = data_b['text'].long()
         loss_mask = data_b['loss_mask'].float()
         lm_labels = data_b['labels'].long()
         padding_mask = data_b['padding_mask'].long()
+        actual_msa_length = data_b['actual_msa_length'].long().item()
+        actual_msa_depth = data_b['actual_msa_depth'].long().item()
 
-        # NOTE: msa_xxx are tensors
-        msa_length = data['msa_length'].long().item() // 2
-        msa_depth = data['msa_depth'].long().item() * 2
-        # print(msa_length, msa_depth)
-        # Get the masks and postition ids.
-        # attention_mask, position_ids = get_tape_masks_and_position_ids(
-        #     tokens,
-        #     tokenizer.cls,
-        #     reset_position_ids=True,
-        #     reset_attention_mask=True)
-        # attention_mask = attention_mask.squeeze(0).squeeze(0)
-        # attention_mask = torch.zeros((msa_depth[0], msa_length[0]))
+        from megatron import get_args
+        args = get_args()
+        MAX_MSA_DEPTH = args.msa_depth
+        MAX_MSA_LENGTH = args.msa_length
+
+        tokens = tokens.reshape((actual_msa_depth, actual_msa_length))
+        tokens = F.pad(tokens, (0, MAX_MSA_LENGTH - actual_msa_length, 0, MAX_MSA_DEPTH - actual_msa_depth), 'constant', 0)
+
+        """
+        In[31]: t4d
+        Out[31]:
+        tensor([[7.6094e+31, 4.5649e-41, 8.0253e+31],
+                [4.5649e-41, 8.0256e+31, 4.5649e-41],
+                [8.0250e+31, 4.5649e-41, 8.0251e+31]])
+
+        In[32]: F.pad(t4d, (0, 1, 0, 2), "constant", 0)
+        Out[32]:
+        tensor([[7.6094e+31, 4.5649e-41, 8.0253e+31, 0.0000e+00],
+                [4.5649e-41, 8.0256e+31, 4.5649e-41, 0.0000e+00],
+                [8.0250e+31, 4.5649e-41, 8.0251e+31, 0.0000e+00],
+                [0.0000e+00, 0.0000e+00, 0.0000e+00, 0.0000e+00],
+                [0.0000e+00, 0.0000e+00, 0.0000e+00, 0.0000e+00]])
+        """
+
+        loss_mask = F.pad(loss_mask.reshape((actual_msa_depth, actual_msa_length)),
+                          (0, MAX_MSA_LENGTH - actual_msa_length, 0, MAX_MSA_DEPTH - actual_msa_depth), 'constant', 0)
+        lm_labels = F.pad(lm_labels.reshape((actual_msa_depth, actual_msa_length)),
+                          (0, MAX_MSA_LENGTH - actual_msa_length, 0, MAX_MSA_DEPTH - actual_msa_depth), 'constant', -1)
 
 
-        attention_mask = torch.zeros((msa_depth, msa_length)).to(tokens.device)
-        position_ids = torch.arange(msa_length).repeat(msa_depth, 1).to(tokens.device)
-        tokens = tokens.reshape((msa_depth, msa_length))
-        loss_mask =  loss_mask.reshape((msa_depth, msa_length))
-        lm_labels =  lm_labels.reshape((msa_depth, msa_length))
-        padding_mask =  padding_mask.reshape((msa_depth, msa_length))
-        attention_mask =  attention_mask.reshape((msa_depth, msa_length))
-        position_ids =  position_ids.reshape((msa_depth, msa_length))
+        # MSA can see all tokens
+        row_attention_mask = torch.zeros((MAX_MSA_DEPTH, MAX_MSA_LENGTH), device=tokens.device)
+        row_attention_mask[actual_msa_depth:, :] = 1
+        row_attention_mask[:, actual_msa_length:] = 1
 
-        # for it in [tokens, loss_mask, lm_labels, padding_mask, attention_mask, position_ids]:
-        #     print(it.shape)
-        return tokens, loss_mask, lm_labels, padding_mask, attention_mask, position_ids
+        col_attention_mask = torch.zeros((MAX_MSA_LENGTH, MAX_MSA_DEPTH), device=tokens.device)
+        col_attention_mask[actual_msa_length:, :] = 1
+        col_attention_mask[:, actual_msa_depth:] = 1
 
-# def get_batch(data_iterator):
-#     """Build the batch."""
+        position_ids = torch.arange(MAX_MSA_LENGTH, device=tokens.device).repeat(MAX_MSA_DEPTH, 1)
 
-#     tokenizer = get_tokenizer()
-#     # Items and their type.
-#     keys = ['text', 'labels', 'loss_mask', 'padding_mask']
-#     datatype = torch.int64
-
-#     # Broadcast data.
-#     if data_iterator is not None:
-#         data = next(data_iterator)
-#     else:
-#         data = None
-#     data_b = mpu.broadcast_data(keys, data, datatype)
-
-#     # Unpack.
-#     tokens = data_b['text'].long()
-#     loss_mask = data_b['loss_mask'].float()
-#     lm_labels = data_b['labels'].long()
-#     padding_mask = data_b['padding_mask'].long()
-
-#     print(tokens, tokens.shape)
-
-#     # Get the masks and postition ids.
-#     attention_mask, position_ids = get_tape_masks_and_position_ids(
-#         tokens,
-#         tokenizer.cls,
-#         reset_position_ids=True,
-#         reset_attention_mask=True)
-#     attention_mask = attention_mask.squeeze(0).squeeze(0)
-#     return tokens, loss_mask, lm_labels, padding_mask, attention_mask, position_ids
+        return tokens, loss_mask, lm_labels, row_attention_mask.bool(), col_attention_mask.bool(), position_ids
 
 
 def forward_step(data_iterator, model, input_tensor):
@@ -277,49 +226,89 @@ def forward_step(data_iterator, model, input_tensor):
     args = get_args()
     timers = get_timers()
 
-    # Get the batch.
-    timers('batch-generator').start()
-    tokens, loss_mask, lm_labels, padding_mask, attention_mask, position_ids \
-        = get_batch(data_iterator)
-    timers('batch-generator').stop()
-    # print('forward step: shapes')
-    # for item in [tokens, loss_mask, lm_labels, padding_mask, attention_mask, position_ids]:
-    #     print(item.device)
-    # all output: torch.Size([32, 512])
+    if IS_FAKE:
+        # Get the batch.
+        timers('batch-generator').start()
+        tokens, loss_mask, lm_labels, padding_mask, attention_mask, position_ids \
+            = get_batch(data_iterator)
+        timers('batch-generator').stop()
 
-    # TODO: restore extended
-    # extended_attention_mask = bert_extended_attention_mask(padding_mask) + attention_mask
-    extended_attention_mask = attention_mask
+        # TODO: restore extended
+        # extended_attention_mask = bert_extended_attention_mask(padding_mask) + attention_mask
+        extended_attention_mask = attention_mask
 
-    # Forward pass through the model.
-    if mpu.is_pipeline_first_stage():
-        assert input_tensor is None
-        if mpu.is_pipeline_last_stage():
-            output_tensor = model(tokens, extended_attention_mask, tokentype_ids=None,
-                                  lm_labels=lm_labels, position_ids=position_ids)
+        # Forward pass through the model.
+        if mpu.is_pipeline_first_stage():
+            assert input_tensor is None
+            if mpu.is_pipeline_last_stage():
+                output_tensor = model(tokens, extended_attention_mask, tokentype_ids=None,
+                                    lm_labels=lm_labels, position_ids=position_ids)
+            else:
+                output_tensor = model(tokens, extended_attention_mask, tokentype_ids=None)
+        elif mpu.is_pipeline_last_stage():
+            assert input_tensor is not None
+            output_tensor = model(input_tensor, extended_attention_mask, lm_labels=lm_labels)
         else:
-            output_tensor = model(tokens, extended_attention_mask, tokentype_ids=None)
-    elif mpu.is_pipeline_last_stage():
-        assert input_tensor is not None
-        output_tensor = model(input_tensor, extended_attention_mask, lm_labels=lm_labels)
+            assert input_tensor is not None
+            output_tensor = model(input_tensor, extended_attention_mask, position_ids=position_ids)
+
+        if mpu.is_pipeline_last_stage():
+            lm_loss_, _ = output_tensor
+
+            lm_loss_ = lm_loss_.float()
+            loss_mask = loss_mask.float()
+            lm_loss = torch.sum(
+                lm_loss_.view(-1) * loss_mask.reshape(-1)) / loss_mask.sum()
+
+            loss = lm_loss
+
+            averaged_losses = average_losses_across_data_parallel_group([lm_loss,])
+
+            return loss, {'lm loss': averaged_losses[0]}
+        return output_tensor
     else:
-        assert input_tensor is not None
-        output_tensor = model(input_tensor, extended_attention_mask, position_ids=position_ids)
+        # Get the batch.
+        timers('batch-generator').start()
+        tokens, loss_mask, lm_labels, row_attention_mask, col_attention_mask, position_ids \
+            = get_batch(data_iterator)
+        timers('batch-generator').stop()
 
-    if mpu.is_pipeline_last_stage():
-        lm_loss_, _ = output_tensor
+        # TODO: restore extended
+        # extended_attention_mask = bert_extended_attention_mask(padding_mask) + attention_mask
+        # extended_attention_mask = row_attention_mask
 
-        lm_loss_ = lm_loss_.float()
-        loss_mask = loss_mask.float()
-        lm_loss = torch.sum(
-            lm_loss_.view(-1) * loss_mask.reshape(-1)) / loss_mask.sum()
+        # row_attention_mask = bert_extended_attention_mask(row_attention_mask_)
+        # col_attention_mask = bert_extended_attention_mask(col_attention_mask_)
 
-        loss = lm_loss
+        # Forward pass through the model.
+        if mpu.is_pipeline_first_stage():
+            assert input_tensor is None
+            if mpu.is_pipeline_last_stage():
+                output_tensor = model(tokens, row_attention_mask, col_attention_mask, tokentype_ids=None,
+                                    lm_labels=lm_labels, position_ids=position_ids)
+            else:
+                output_tensor = model(tokens, row_attention_mask, col_attention_mask, tokentype_ids=None)
+        elif mpu.is_pipeline_last_stage():
+            assert input_tensor is not None
+            output_tensor = model(input_tensor, row_attention_mask, col_attention_mask, lm_labels=lm_labels)
+        else:
+            assert input_tensor is not None
+            output_tensor = model(input_tensor, row_attention_mask, col_attention_mask, position_ids=position_ids)
 
-        averaged_losses = average_losses_across_data_parallel_group([lm_loss,])
+        if mpu.is_pipeline_last_stage():
+            lm_loss_, _ = output_tensor
 
-        return loss, {'lm loss': averaged_losses[0]}
-    return output_tensor
+            lm_loss_ = lm_loss_.float()
+            loss_mask = loss_mask.float()
+            lm_loss = torch.sum(
+                lm_loss_.view(-1) * loss_mask.reshape(-1)) / loss_mask.sum()
+
+            loss = lm_loss
+
+            averaged_losses = average_losses_across_data_parallel_group([lm_loss,])
+
+            return loss, {'lm loss': averaged_losses[0]}
+        return output_tensor
 
 
 def train_valid_test_datasets_provider(train_val_test_num_samples):
@@ -327,7 +316,7 @@ def train_valid_test_datasets_provider(train_val_test_num_samples):
     args = get_args()
 
     print_rank_0('> building train, validation, and test datasets '
-                 'for TAPE ...')
+                 'for MSA ...')
     train_ds, valid_ds, test_ds = build_train_valid_test_datasets(
         data_prefix=args.data_path,
         data_impl=args.data_impl,
@@ -343,8 +332,5 @@ def train_valid_test_datasets_provider(train_val_test_num_samples):
 
 
 if __name__ == "__main__":
-    print('starting')
-    import os
-
     pretrain(train_valid_test_datasets_provider, model_provider, forward_step,
              args_defaults={'tokenizer_type': 'BertWordPieceLowerCase'})

@@ -206,6 +206,8 @@ class ParallelColumnSelfAttention(MegatronModule):
 
     def forward(self, hidden_states, attention_mask, layer_past=None,
                 get_key_value=False):
+
+        # print("forwarding col attention... " * 10)
         # hidden_states: [sq, b, h] -> [b, sq, h]
         hidden_states = hidden_states.transpose(0, 1)
 
@@ -307,13 +309,45 @@ class ParallelColumnSelfAttention(MegatronModule):
         # ===========================
         # print('attention_mask', attention_mask.shape)
 
-        attention_mask = attention_mask.transpose(0, 1)  # [b, sq] -> [sq, b]
         # attention scores and attention mask [b, np, sq, sk]
-        manual_col_attention_mask = attention_mask.new_zeros(attention_scores.shape[0], 1, attention_scores.shape[2], attention_scores.shape[3])
-        # print('manual_col_attention_mask shape', manual_col_attention_mask.shape)
+
+        # attention_mask = attention_mask.transpose(0, 1)  # [b, sq] -> [sq, b]
+        # manual_col_attention_mask = attention_mask.new_zeros(attention_scores.shape[0], 1, attention_scores.shape[2], attention_scores.shape[3])
+        # attention_probs = self.scale_mask_softmax(attention_scores,
+        #                                           manual_col_attention_mask)
+
+        # attention_mask
+        # print('col attn shape', attention_mask.shape) # col attn shape torch.Size([512, 32])
+        from megatron.model.bert_model import bert_extended_attention_mask
+
+        def construct_col_attention(col_attention_):
+            """consume a 2-D attention mask [MSA_len, MSA_depth], and return a 4-D mask [MSA_Len, 1, MSA_depth, MSA_depth]"""
+            col_attention = col_attention_.long()
+            valid_msa_col_depth = sum(col_attention[0] == 0)
+            valid_msa_row_len = sum(col_attention[:, 0] == 0)
+
+            msa_length = col_attention.shape[0]
+            msa_depth = col_attention.shape[1]
+            single_col_mask = col_attention.new_ones((msa_depth, msa_depth))
+            single_col_mask[: valid_msa_col_depth, : valid_msa_col_depth] = 0
+            single_col_mask = single_col_mask.bool().unsqueeze(0).unsqueeze(0)
+            msa_col_mask = single_col_mask.repeat(msa_length, 1, 1, 1)
+            msa_col_mask[valid_msa_row_len:, :, :, :, ] = 1
+            return msa_col_mask
+
+        # attention_mask = bert_extended_attention_mask(attention_mask)
+        msa_col_attention_mask = construct_col_attention(attention_mask)
+        assert msa_col_attention_mask.shape == (attention_scores.shape[0], 1, attention_scores.shape[2],
+                                                attention_scores.shape[3]), 'column mask shape mismatch'
 
         attention_probs = self.scale_mask_softmax(attention_scores,
-                                                  manual_col_attention_mask)
+                                                 msa_col_attention_mask)
+
+        # manual_col_attention_mask = attention_mask.new_ones(attention_scores.shape[0], 1, attention_scores.shape[2], attention_scores.shape[3])
+        # print('attention_scores.shape'*10, attention_scores.shape)
+        # manual_col_attention_mask = attention_mask.new_ones(attention_scores.shape[1], 1, attention_scores.shape[0])
+        # print('manual_col_attention_mask shape' * 10, manual_col_attention_mask.shape)
+
 
         # This is actually dropping out entire tokens to attend to, which might
         # seem a bit unusual, but is taken from the original Transformer paper.
@@ -543,6 +577,8 @@ class ParallelRowSelfAttention(MegatronModule):
 
         # attention scores [np, sq, sk]. attention mask [b, sq]
         # attention probs [np, sq, sk]
+
+        # print('manual_row_attention_mask shape' * 10, attention_mask.shape)
         attention_probs = self.scale_mask_softmax(attention_scores,
                                                   attention_mask)
 
@@ -634,23 +670,29 @@ class ParallelTransformerLayer(MegatronModule):
         self.row_attention = ParallelRowSelfAttention(attention_mask_func, init_method,
                                                       output_layer_init_method,
                                                       layer_number)
+        # TODO: restore col attention
         self.col_attention = ParallelColumnSelfAttention(attention_mask_func, init_method,
                                                          output_layer_init_method,
                                                          layer_number)
-
+        # end comment
         self.hidden_dropout = args.hidden_dropout
         self.bias_dropout_fusion = args.bias_dropout_fusion
 
+        # start comment
         # Layernorm on the input data.
         self.post_attention_layernorm = LayerNorm(
             args.hidden_size,
             eps=args.layernorm_epsilon)
+        # TODO: end col attention
 
         # MLP
         self.mlp = ParallelMLP(init_method,
                                output_layer_init_method)
 
-    def forward(self, hidden_states, attention_mask, layer_past=None,
+    def forward(self, hidden_states,
+                # attention_mask,
+                row_attention_mask, col_attention_mask,
+                layer_past=None,
                 get_key_value=False):
         # hidden_states: [b, s, h]
 
@@ -660,7 +702,7 @@ class ParallelTransformerLayer(MegatronModule):
         # Self attention.
         attention_output, attention_bias = \
             self.row_attention(layernorm_output,
-                               attention_mask,
+                               row_attention_mask,
                                layer_past=layer_past,
                                get_key_value=get_key_value)
 
@@ -696,12 +738,17 @@ class ParallelTransformerLayer(MegatronModule):
         # Column attention
         # Layer norm at the begining of the transformer layer.
         layernorm_output = self.input_layernorm_col(layernorm_input)
+
         # Self attention.
+
+        # TODO: restore col attention
         attention_output, attention_bias = \
             self.col_attention(layernorm_output,
-                               attention_mask,
+                               # attention_mask,
+                               col_attention_mask,
                                layer_past=layer_past,
                                get_key_value=get_key_value)
+
 
         if get_key_value:
             attention_output, presents = attention_output
@@ -734,6 +781,8 @@ class ParallelTransformerLayer(MegatronModule):
 
         # Layer norm post the self attention.
         layernorm_output = self.post_attention_layernorm(layernorm_input)
+
+        # TODO: end col attention
 
         # MLP.
         mlp_output, mlp_bias = self.mlp(layernorm_output)
@@ -797,7 +846,7 @@ class ParallelTransformer(MegatronModule):
     def _get_layer(self, layer_number):
         return self.layers[layer_number]
 
-    def _checkpointed_forward(self, hidden_states, attention_mask):
+    def _checkpointed_forward(self, hidden_states, row_attention_mask, col_attention_mask):
         """Forward method with activation checkpointing."""
 
         def custom(start, end):
@@ -805,7 +854,10 @@ class ParallelTransformer(MegatronModule):
                 x_ = inputs[0]
                 for index in range(start, end):
                     layer = self._get_layer(index)
-                    x_ = layer(x_, inputs[1])
+                    # x_ = layer(x_, inputs[1])
+                    # NOTE DEBUGGING Modification: CHECKPOINT FORWARDING
+                    x_ = layer(x_, inputs[1], inputs[2])
+
                 return x_
 
             return custom_forward
@@ -816,12 +868,15 @@ class ParallelTransformer(MegatronModule):
         while l < self.num_layers:
             hidden_states = mpu.checkpoint(
                 custom(l, l + self.checkpoint_num_layers),
-                hidden_states, attention_mask)
+                hidden_states, row_attention_mask, col_attention_mask,)
             l += self.checkpoint_num_layers
 
         return hidden_states
 
-    def forward(self, hidden_states, attention_mask, layer_past=None,
+    def forward(self, hidden_states,
+                # attention_mask,
+                row_attention_mask, col_attention_mask,
+                layer_past=None,
                 get_key_value=False):
 
         # Checks.
@@ -844,8 +899,12 @@ class ParallelTransformer(MegatronModule):
                 hidden_states = hidden_states.transpose(0, 1).contiguous()
 
         if self.checkpoint_activations:
+            row_attention_mask, col_attention_mask,
+            # hidden_states = self._checkpointed_forward(hidden_states,
+            #                                            attention_mask)
             hidden_states = self._checkpointed_forward(hidden_states,
-                                                       attention_mask)
+                                                       row_attention_mask, col_attention_mask,
+                                                       )
         else:
             if get_key_value:
                 presents = []
@@ -855,7 +914,7 @@ class ParallelTransformer(MegatronModule):
                 if layer_past is not None:
                     past = layer_past[index]
                 hidden_states = layer(hidden_states,
-                                      attention_mask,
+                                      row_attention_mask, col_attention_mask,
                                       layer_past=past,
                                       get_key_value=get_key_value)
                 if get_key_value:
