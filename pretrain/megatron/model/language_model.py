@@ -325,17 +325,27 @@ class TransformerLanguageModelBase(MegatronModule):
             transformer_input = language_model_input
 
         # Transformer.
-        transformer_output = self.transformer(transformer_input,
-                                              row_attention_mask, col_attention_mask,
-                                              layer_past=layer_past,
-                                              get_key_value=get_key_value)
+        # TODO: attn scores
+        if get_args().compute_attn_weights:
+            transformer_output, attn_layers = self.transformer(transformer_input,
+                                                  row_attention_mask, col_attention_mask,
+                                                  layer_past=layer_past,
+                                                  get_key_value=get_key_value)
+        else:
+            transformer_output = self.transformer(transformer_input,
+                                                  row_attention_mask, col_attention_mask,
+                                                  layer_past=layer_past,
+                                                  get_key_value=get_key_value)
 
         if mpu.is_pipeline_last_stage() and self.add_pooler:
             pooled_output = self.pooler(transformer_output,
                                         pooling_sequence_index)
             return transformer_output, pooled_output
-
-        return transformer_output
+        # TODO: attn scores
+        if get_args().compute_attn_weights:
+            return transformer_output, attn_layers
+        else:
+            return transformer_output
 
     def state_dict_for_save_checkpoint(self, destination=None, prefix='',
                                        keep_vars=False):

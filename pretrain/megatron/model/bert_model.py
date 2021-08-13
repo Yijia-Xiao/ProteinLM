@@ -17,7 +17,7 @@
 
 import torch
 
-from megatron import get_args
+from megatron import get_args, print_rank_0
 from megatron import mpu
 from megatron.model.language_model import parallel_lm_logits
 from megatron.model.language_model import get_language_model
@@ -28,9 +28,11 @@ from megatron.model.utils import init_method_normal
 from megatron.model.utils import scaled_init_method_normal
 from .module import MegatronModule
 
+
 def bert_attention_mask_func(attention_scores, attention_mask):
     attention_scores.masked_fill_(attention_mask, -10000.0)
     return attention_scores
+
 
 def bert_extended_attention_mask(attention_mask):
     # We create a 3D attention mask from a 2D tensor mask.
@@ -48,6 +50,7 @@ def bert_extended_attention_mask(attention_mask):
 
     return extended_attention_mask
 
+
 def bert_position_ids(token_ids):
     # Create position ids
     seq_length = token_ids.size(1)
@@ -56,6 +59,30 @@ def bert_position_ids(token_ids):
     position_ids = position_ids.unsqueeze(0).expand_as(token_ids)
 
     return position_ids
+
+
+def apc(x):
+    "average product correct"
+    a1 = x.sum(-1, keepdims=True)
+    a2 = x.sum(-2, keepdims=True)
+    a12 = x.sum((-1, -2), keepdims=True)
+
+    avg = a1 * a2
+    avg.div_(a12)  # in-place to reduce memory
+    normalized = x - avg
+    return normalized
+
+
+# class Counter(object):
+#     __count = 0
+#
+#     @classmethod
+#     def get_count(cls):
+#         return cls.__count
+#
+#     @classmethod
+#     def add_count(cls):
+#         cls.__count += 1
 
 
 class BertLMHead(MegatronModule):
@@ -214,21 +241,65 @@ class BertModelBase(MegatronModule):
             kwargs['tokentype_ids'] = tokentype_ids
         else:
             args = [bert_model_input, row_attention_mask, col_attention_mask]
-        lm_output = self.language_model(*args, **kwargs)
+
+        import os
+        if get_args().compute_attn_weights:
+            lm_output, attn_layers = self.language_model(*args, **kwargs)
+            # attn_path = get_args().attention_save
+            # attn_save_freq = get_args().attn_save_freq
+            # # lm_output, attn_layers = self.language_model(*args, **kwargs)
+            # idx = Counter.get_count()
+            # pid = os.getpid()
+            # os.system(f'mkdir -p {attn_path}/{pid}')
+            # if idx % attn_save_freq == 0:
+            #     torch.save(attn_layers, f'{attn_path}/{pid}/attn_weights_{idx:05d}.pt')
+            # Counter.add_count()
+            # TODO NOTE: moved to pretrain_msa part
+
+            # idx_file = os.path.join(attn_path, 'idx')
+            # with open(idx_file, 'r') as f:
+            #     idx = int(f.readline().strip())
+            #     if idx % 2000 == 0:
+            #         torch.save(attn_layers, f'{attn_path}/attn_weights_{idx:05d}.pt')
+            #     idx += 1
+            # with open(idx_file, 'w') as f:
+            #     f.write(str(idx))
+
+            # with open('/workspace/attn/idx', 'r') as f:
+            #     idx = int(f.readline().strip())
+            #     torch.save(attn_layers, f'/workspace/attn/attn_layers_{idx:05d}.pt')
+            #     idx += 1
+            # with open('/workspace/attn/idx', 'w') as f:
+            #     f.write(str(idx))
+        else:
+            lm_output = self.language_model(*args, **kwargs)
+        # lm_output = self.language_model(*args, **kwargs)
+
         if mpu.is_pipeline_last_stage() and self.add_binary_head:
             lm_output, pooled_output = lm_output
         else:
             pooled_output = None
 
         if mpu.is_pipeline_last_stage():
-            return post_language_model_processing(lm_output, pooled_output,
-                                                  self.lm_head, self.binary_head,
-                                                  lm_labels,
-                                                  self.word_embeddings_weight(),
-                                                  self.fp16_lm_cross_entropy)
+            # return post_language_model_processing(lm_output, pooled_output,
+            #                                       self.lm_head, self.binary_head,
+            #                                       lm_labels,
+            #                                       self.word_embeddings_weight(),
+            #                                       self.fp16_lm_cross_entropy)
+            # TODO Add return attention
+            if get_args().compute_attn_weights:
+                return (post_language_model_processing(lm_output, pooled_output,
+                                                      self.lm_head, self.binary_head,
+                                                      lm_labels,
+                                                      self.word_embeddings_weight(),
+                                                      self.fp16_lm_cross_entropy),
+                        attn_layers)
         else:
-            return lm_output
-
+            # TODO no support attention with pipeline
+            if get_args().compute_attn_weights:
+                raise NotImplementedError
+            else:
+                return lm_output
 
     def state_dict_for_save_checkpoint(self, destination=None, prefix='',
                                        keep_vars=False):

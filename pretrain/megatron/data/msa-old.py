@@ -13,28 +13,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""MSA style dataset."""
+"""TAPE style dataset."""
 
 import os
 import time
 
 import numpy as np
-import numpy.random
 import torch
 
-from megatron import get_args
+
 from megatron import get_tokenizer
 from megatron import mpu, print_rank_0
 from megatron.data.blendable_dataset import BlendableDataset
-from megatron.data.dataset_utils import get_datasets_weights_and_num_samples, truncate_segments
+from megatron.data.dataset_utils import get_datasets_weights_and_num_samples
 from megatron.data.dataset_utils import get_train_valid_test_split_
 from megatron.data.indexed_dataset import make_dataset as make_indexed_dataset
 
 from megatron.data.gpt_dataset import _build_doc_idx, _build_shuffle_idx, _num_epochs, get_indexed_dataset_
 from megatron.data.dataset_utils import pad_and_convert_to_numpy
-from megatron.data.dataset_utils import msa_pad_and_convert_to_numpy
 from megatron.data.dataset_utils import create_masked_lm_predictions
-from megatron.data.dataset_utils import create_masked_msa_predictions
 
 
 def build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
@@ -159,8 +156,9 @@ class MSADataset(torch.utils.data.Dataset):
         self.sep_id = tokenizer.sep
         self.mask_id = tokenizer.mask
         self.pad_id = tokenizer.pad
-        # NOTE: Add self.msa_sep_id, also modified in megatron/tokenizer/tokenizer.py, class _BertWordPieceTokenizer
         self.msa_sep_id = tokenizer.msa_sep
+
+    # NOTE: Add self.msa_sep_id, also modified in megatron/tokenizer/tokenizer.py, class _BertWordPieceTokenizer
 
     def __len__(self):
         # -1 is due to data structure used to retieve the index:
@@ -171,14 +169,12 @@ class MSADataset(torch.utils.data.Dataset):
         # Get the shuffled index.
         idx = self.shuffle_idx[idx]
         # Start and end documents and offsets.
-        # print('self.sample_idx', self.sample_idx, len(self.sample_idx), self.sample_idx[:10], self.sample_idx[-10:])
-
         doc_index_f = self.sample_idx[idx]
         doc_index_l = self.sample_idx[idx + 1]
         # If we are within the same document, just extract the chunk.
-
+        print('doc_index_f, doc_index_l', doc_index_f, doc_index_l)
         sample = [self.indexed_dataset.get(self.doc_idx[i]) for i in range(doc_index_f, doc_index_l)]
-
+                
         # Note that this rng state should be numpy and not python since
         # python randint is inclusive whereas the numpy one is exclusive.
         np_rng = np.random.RandomState(seed=(self.seed + idx))
@@ -215,116 +211,68 @@ def build_training_sample(sample,
               the opper bound whereas the numpy one is exclusive.
     """
 
-    # We assume that we have EXACTLY one sentence in the sample
+    # We assume that we have at least one sentence in the sample
+    # print('build_training_sample samples', sample)
+    # print(sample[0], len(sample[0]))
 
     # assert len(sample) >= 1
     assert len(sample) == 1
-
-    args = get_args()
-    ARGS_MSA_DEPTH = args.msa_depth
-    ARGS_MSA_LENGTH = args.msa_length
+    # print('MSA SEP ID', msa_sep_id, 'sample length', len(sample[0]))
+    # print('MSA LENGTH', sample[0].tolist().index(msa_sep_id))
+    
+    # sample.shape [1, MSA_DEPTH * MSA_LENGTH + 1]
 
     msa_length = sample[0].tolist().index(msa_sep_id)
+
     sample = np.delete(sample[:], [msa_length], axis=1)
+
     assert len(sample[0]) % msa_length == 0, 'MSA_TOTAL_LENGTH = MSA_DEPTH * MSA_LENGTH'
     msa_depth = len(sample[0]) // msa_length
+    print('MSA DEPTTHHHH...' * 10, msa_depth, msa_length)
 
-    # TODO depth to max
-    if msa_depth < ARGS_MSA_DEPTH:
-        p = []
-        sample_idx = [0]
-        sample_idx.extend([np.random.randint(0, msa_depth) for _ in range(ARGS_MSA_DEPTH - 1)])
-        # for i in range(ARGS_MSA_DEPTH):
-        #     p.extend(sample[0][: msa_length])
-        original_msa = sample[0].reshape(msa_depth, msa_length)
-        for idx in sample_idx:
-            # p.extend(sample[0][: msa_length])
-            p.extend(original_msa[idx])
-        sample = np.array([p])
-        msa_depth = ARGS_MSA_DEPTH
-    # TODO depth-first or depth-first logic here
-    actual_msa_depth = min(msa_depth, ARGS_MSA_DEPTH)
-    actual_msa_length = min(msa_length, ARGS_MSA_LENGTH)
-
-    # TODO depth to max
-    assert actual_msa_depth == ARGS_MSA_DEPTH
-
-    # TODO Add [CLS] to each sentence
-    tokens_without_cls = sample[0].copy()
-
-    # TODO: check logic
-    # print('len(tokens_without_cls) == actual_msa_depth * actual_msa_length', len(tokens_without_cls),
-    #       msa_depth, msa_length)
-    assert len(tokens_without_cls) == msa_depth * msa_length
-    tokens_matrix_without_cls = tokens_without_cls.reshape(msa_depth, msa_length)
-    tokens_matrix_without_cls[:, 1:] = tokens_matrix_without_cls[:, :-1]
-    # tokens_matrix_with_cls = tokens_matrix_without_cls.clone()
-    tokens_matrix_with_cls = tokens_matrix_without_cls.copy()
-    tokens_matrix_with_cls[:, 0] = cls_id
-
-    # uncropped_msa = tokens_matrix_with_cls.reshape(-1).clone()
-    uncropped_msa = tokens_matrix_with_cls.reshape(-1).copy()
-    # uncropped_msa = sample[0].copy()
-    args = get_args()
-    msa_shuffle = True if args.msa_shuffle == 1 else False
-
-    if msa_shuffle:
-        # print("shuffling...")
-        uncropped_msa = uncropped_msa.reshape((msa_depth, msa_length))
-        msa_origin = uncropped_msa[0].reshape(msa_length)
-        msa_aligns = uncropped_msa[1:]
-        numpy.random.shuffle(msa_aligns)
-        msa_aligns = msa_aligns.reshape((msa_depth - 1, msa_length))
-        uncropped_msa = numpy.append(msa_origin, msa_aligns)
-
-    # TODO: expand along row dim
-    # if actual_msa_depth < ARGS_MSA_DEPTH:
-    #     actual_msa_depth = ARGS_MSA_DEPTH
-    #     # uncropped_msa = torch.repeat_interleave(uncropped_msa, (ARGS_MSA_DEPTH, 1))
-    #     uncropped_msa = np.array([uncropped_msa[0] for _ in range(actual_msa_depth)])
-
-    sample = [uncropped_msa[: actual_msa_depth * actual_msa_length]]
-    assert actual_msa_depth * actual_msa_length == len(sample[0]), \
-        'actual_msa_depth * actual_msa_length == len(sample[0])'
-
-    """
     truncated = False
+    # here remove the `|` token
+
+    # if len(sample[0]) + 1 + 1 > max_seq_length:
+    """
     if len(sample[0]) + 1 > max_seq_length:
         assert len(sample) == 1
-        sample[0] = sample[0][:max_seq_length - 1]
+        # here remove the `|` token, so -1
+        # sample[0] = sample[0][:max_seq_length - 1]
+        sample[0] = sample[0][:max_seq_length - 1 - 1]
         truncated = True
     """
-
+    
+    # NOTE: we donnot do the batch now, so this is no need for the [CLS] token, we can remove the `+1`
     # target_seq_length = sum([len(_)+1 for _ in sample])
+    # print(sample, len(sample[0]))
+    
+    max_msa_depth = (max_seq_length // msa_length)
+    # sample[:] = sample[:][:max_msa_depth * msa_length]
+    print(sample[0], type(sample[0]), sample[0].shape)
+
+    sample_uncropped = sample.copy()
+    sample_new = []
+    for idx in range(len(sample_uncropped)):
+        sample_new.append(sample_uncropped[idx][: max_msa_depth * msa_length])
+    sample = sample_new
     target_seq_length = sum([len(_) for _ in sample])
-
-    assert target_seq_length == actual_msa_depth * actual_msa_length, \
-        'target_seq_length == actual_msa_depth * actual_msa_length'
-
-    # print('target_seq_length, max_seq_length', target_seq_length, max_seq_length)
+    print('target_seq_length, len(sample)', target_seq_length, len(sample))
     assert target_seq_length <= max_seq_length
 
     max_num_tokens = target_seq_length
 
     # Build tokens and toketypes.
-    # tokens = []
+    tokens = []
     tokentypes = [0] * target_seq_length
-    # for s in sample:
-    #     tokens.append(cls_id)
-    #     tokens += s.tolist()
-
-    truncated = False
-    # for s in sample:
-    #     # NOTE: remove [CLS] append
-    #     # tokens.append(cls_id)
-    #     tokens += s.tolist()
-    #     # print('concatenating... cls token', s.tolist())
-    tokens = sample[0].tolist()
-
-    assert len(tokens) == actual_msa_depth * actual_msa_length, 'len(tokens) == actual_msa_depth * actual_msa_length'
+    for s in sample:
+        # NOTE: remove [CLS] append
+        # tokens.append(cls_id)
+        tokens += s.tolist()
+        # print('concatenating... cls token', s.tolist())
+    # print(tokens)
 
     # Masking.
-    # ori_tokens = tokens
     max_predictions_per_seq = masked_lm_prob * max_num_tokens
     (tokens, masked_positions, masked_labels, _) = create_masked_lm_predictions(
         tokens, vocab_id_list, vocab_id_to_token_dict, masked_lm_prob,
@@ -333,8 +281,13 @@ def build_training_sample(sample,
     # Padding.
     tokens_np, tokentypes_np, labels_np, padding_mask_np, loss_mask_np \
         = pad_and_convert_to_numpy(tokens, tokentypes, masked_positions,
-                                   masked_labels, pad_id, target_seq_length)
+                                   masked_labels, pad_id, max_seq_length)
 
+
+    # print(target_seq_length, tokens_np, tokentypes_np, labels_np, padding_mask_np, loss_mask_np)
+
+    # print('msa_depth' * 10, msa_depth)
+    # print('train sample', train_sample)
     train_sample = {
         'text': tokens_np,
         # 'types': tokentypes_np,
@@ -343,13 +296,13 @@ def build_training_sample(sample,
         'loss_mask': loss_mask_np,
         'padding_mask': padding_mask_np,
         'truncated': int(truncated),
-        'actual_msa_depth': actual_msa_depth,
-        'actual_msa_length': actual_msa_length
-        }
+        'msa_depth': msa_depth,
+        'msa_length': msa_length }
 
-    # print('tokens_np.shape', tokens_np.shape)
-    assert len(train_sample['text']) == train_sample['actual_msa_depth'] * train_sample['actual_msa_length'], \
-        "len(train_sample['text']) == train_sample['actual_msa_depth'] * train_sample['actual_msa_length']"
+    print('train_sample', train_sample)
+    # print('train_sample', tokens_np, tokens_np.shape)
+    # print('train_sample', tokens_np[-513:], len(tokens_np[-513:]))
+
     return train_sample
 
 
@@ -411,6 +364,9 @@ def _build_index_mappings(name, data_prefix, documents, sizes,
                 assert last_epoch_num_samples >= 0, \
                     'last epoch number of samples should be non-negative.'
                 num_samples_per_epoch = (tokens_per_epoch - 1) // seq_length
+
+                # print('length debug', last_epoch_num_samples, (num_samples_per_epoch + 1), seq_length)
+
                 assert last_epoch_num_samples < (num_samples_per_epoch + 1), \
                     'last epoch number of samples exceeded max value.'
                 # If we have less than 80% of the samples for the last epoch,
@@ -492,6 +448,7 @@ def _build_index_mappings(name, data_prefix, documents, sizes,
         sample_idx.shape[0]))
     print_rank_0('    total number of epochs: {}'.format(num_epochs))
 
+    print('sample_idx', sample_idx)
     return doc_idx, sample_idx, shuffle_idx
 
 def _build_sample_idx(sizes, doc_idx, seq_length,
@@ -503,6 +460,10 @@ def _build_sample_idx(sizes, doc_idx, seq_length,
 
     # Total number of samples. For -1 see comments in `_num_epochs`.
     num_samples = (num_epochs * tokens_per_epoch - 1) // seq_length
+    # print('num_samples' * 10, num_samples)
+        # num_samplesnum_samplesnum_samplesnum_samplesnum_samplesnum_samplesnum_samplesnum_samplesnum_samplesnum_samples 3969
+        # exit(0)
+    print('num_samples, num_epochs, tokens_per_epoch, seq_length', num_samples, num_epochs, tokens_per_epoch, seq_length)
     dtype_ = np.uint32
     if doc_idx.size >= (np.iinfo(np.uint32).max - 1):
         dtype_ = np.int64
@@ -517,47 +478,29 @@ def _build_sample_idx(sizes, doc_idx, seq_length,
     # Start with first document and no offset.
     sample_idx[sample_index] = doc_idx_index
     sample_index += 1
-
+    print("doc_idx len", len(doc_idx))
     while sample_index <= num_samples:
         # Start with a fresh sequence.
-
-        # remaining_seq_length = seq_length
-        # while remaining_seq_length != 0:
+        remaining_seq_length = seq_length
+        while remaining_seq_length != 0:
             # Get the document length.
-        # doc_id = doc_idx[doc_idx_index]
-        # doc_length = sizes[doc_id]
-        # And add it to the current sequence, +1 means the [CLS] token
-        # remaining_seq_length -= doc_length + 1
-        # If we have more than a full sequence, we always set
-        # remaining length to zero so we return from the while loop.
-        # if current sample has no other doc in it, we truncate this doc,
-        # otherwise we start a new sample
-        # if remaining_seq_length <= 0:
-        #     if remaining_seq_length + doc_length + 1 == seq_length:
-        #         doc_idx_index += 1
-        #     remaining_seq_length = 0
-        # else:
-            # Otherwise, start from the begining of the next document.
-        doc_idx_index += 1
+            doc_id = doc_idx[doc_idx_index]
+            doc_length = sizes[doc_id]
+            # And add it to the current sequence, +1 means the [CLS] token
+            remaining_seq_length -= doc_length + 1
+            # If we have more than a full sequence, we always set
+            # remaining length to zero so we return from the while loop.
+            # if current sample has no other doc in it, we truncate this doc,
+            # otherwise we start a new sample
+            if remaining_seq_length <= 0:
+                if remaining_seq_length + doc_length + 1 == seq_length:
+                    doc_idx_index += 1
+                remaining_seq_length = 0
+            else:
+                # Otherwise, start from the begining of the next document.
+                doc_idx_index += 1
         # Record the sequence.
         sample_idx[sample_index] = doc_idx_index
         sample_index += 1
-
-
-    # while sample_index <= num_samples:
-    #     # Start with a fresh sequence.
-    #     # remaining_seq_length = seq_length
-    #     # Get the document length.
-    #     doc_id = doc_idx[doc_idx_index]
-    #     # And add it to the current sequence, +1 means the [CLS] token
-    #     # remaining_seq_length -= doc_length + 1
-    #     # If we have more than a full sequence, we always set
-    #     # remaining length to zero so we return from the while loop.
-    #     # if current sample has no other doc in it, we truncate this doc,
-    #     # otherwise we start a new sample
-    #     doc_idx_index += 1
-    #     # Record the sequence.
-    #     sample_idx[sample_index] = doc_idx_index
-    #     sample_index += 1
 
     return sample_idx

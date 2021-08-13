@@ -9,8 +9,9 @@ dist/
 
 # helpers.so for data processing
 helpers.*.so
-data/
 examples/
+data/
+!/megatron/data
 tb/
 protein_tools/*.bin
 protein_tools/*.idx

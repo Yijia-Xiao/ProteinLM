@@ -1,7 +1,7 @@
 # coding=utf-8
 # Copyright (c) 2020, NVIDIA CORPORATION.  All rights reserved.
 # Copyright (c) 2021, Knowledge Engineering Group (KEG), Tsinghua University
-# Modified by Jiezhong Qiu
+# Modified by Yijia Xiao
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@
 # limitations under the License.
 
 """Pretrain MSA"""
+import os
 
 import torch
 import torch.nn.functional as F
@@ -38,8 +39,21 @@ import torch.nn.functional as F
 # IS_FAKE = True
 IS_FAKE = False
 
+
 def msa_preprocess(msa_string):
     pass
+
+
+class Counter(object):
+    __count = 0
+
+    @classmethod
+    def get_count(cls):
+        return cls.__count
+
+    @classmethod
+    def add_count(cls):
+        cls.__count += 1
 
 
 def model_provider():
@@ -183,7 +197,14 @@ def get_batch(data_iterator):
         MAX_MSA_LENGTH = args.msa_length
 
         tokens = tokens.reshape((actual_msa_depth, actual_msa_length))
-        tokens = F.pad(tokens, (0, MAX_MSA_LENGTH - actual_msa_length, 0, MAX_MSA_DEPTH - actual_msa_depth), 'constant', 0)
+        # print('tokens.shape1', tokens.shape)
+        # if actual_msa_depth < MAX_MSA_DEPTH:
+        #     actual_msa_depth = MAX_MSA_DEPTH
+        #     tokens = tokens[0].repeat((MAX_MSA_DEPTH, 1))
+        # print('tokens.shape2', tokens.shape)
+
+        tokens = F.pad(tokens, (0, MAX_MSA_LENGTH - actual_msa_length, 0,
+                                MAX_MSA_DEPTH - actual_msa_depth), 'constant', 0)
 
         """
         In[31]: t4d
@@ -296,7 +317,31 @@ def forward_step(data_iterator, model, input_tensor):
             output_tensor = model(input_tensor, row_attention_mask, col_attention_mask, position_ids=position_ids)
 
         if mpu.is_pipeline_last_stage():
-            lm_loss_, _ = output_tensor
+
+
+            # TODO: add attention weights
+            # REMOVE BEGIN
+            # lm_loss_, _ = output_tensor
+            # REMOVE END
+
+            # ADD BEGIN
+            # import os
+            # print('pid = ', str(os.getpid()) * 10)
+            _post_language_model_processing, attn_layers_dict = output_tensor
+            lm_loss_, _ = _post_language_model_processing
+
+            attn_path = get_args().attention_save
+            attn_save_freq = get_args().attn_save_freq
+            # lm_output, attn_layers = self.language_model(*args, **kwargs)
+            idx = Counter.get_count()
+            pid = os.getpid()
+            # os.system(f'mkdir -p {attn_path}/{pid}')
+            if idx % attn_save_freq == 0:
+                print_rank_0(f'saving to {attn_path}/attn_weights_{idx:09d}.pt')
+                torch.save(attn_layers_dict, f'{attn_path}/attn_weights_{idx:09d}.pt')
+            Counter.add_count()
+            # ADD END
+
 
             lm_loss_ = lm_loss_.float()
             loss_mask = loss_mask.float()

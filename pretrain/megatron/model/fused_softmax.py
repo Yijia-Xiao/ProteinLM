@@ -125,7 +125,10 @@ class FusedScaleMaskSoftmax(torch.nn.Module):
 
             if self.scale is not None:
                 input = input * self.scale
-            mask_output = self.mask_func(input, mask.unsqueeze(1).unsqueeze(2))
+            # TODO check fp16 compatibility
+            # ORIGINAL
+            # mask_output = self.mask_func(input, mask.unsqueeze(1).unsqueeze(2))
+            mask_output = self.mask_func(input, mask)
             probs = torch.nn.Softmax(dim=-1)(mask_output)
 
             if self.input_in_fp16 and self.softmax_in_fp32:

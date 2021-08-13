@@ -207,7 +207,7 @@ class ParallelColumnSelfAttention(MegatronModule):
     def forward(self, hidden_states, attention_mask, layer_past=None,
                 get_key_value=False):
 
-        # print("forwarding col attention... " * 10)
+        print("forwarding col attention... " * 10)
         # hidden_states: [sq, b, h] -> [b, sq, h]
         hidden_states = hidden_states.transpose(0, 1)
 
@@ -319,29 +319,9 @@ class ParallelColumnSelfAttention(MegatronModule):
         # attention_mask
         # print('col attn shape', attention_mask.shape) # col attn shape torch.Size([512, 32])
         from megatron.model.bert_model import bert_extended_attention_mask
-
-        def construct_col_attention(col_attention_):
-            """consume a 2-D attention mask [MSA_len, MSA_depth], and return a 4-D mask [MSA_Len, 1, MSA_depth, MSA_depth]"""
-            col_attention = col_attention_.long()
-            valid_msa_col_depth = sum(col_attention[0] == 0)
-            valid_msa_row_len = sum(col_attention[:, 0] == 0)
-
-            msa_length = col_attention.shape[0]
-            msa_depth = col_attention.shape[1]
-            single_col_mask = col_attention.new_ones((msa_depth, msa_depth))
-            single_col_mask[: valid_msa_col_depth, : valid_msa_col_depth] = 0
-            single_col_mask = single_col_mask.bool().unsqueeze(0).unsqueeze(0)
-            msa_col_mask = single_col_mask.repeat(msa_length, 1, 1, 1)
-            msa_col_mask[valid_msa_row_len:, :, :, :, ] = 1
-            return msa_col_mask
-
-        # attention_mask = bert_extended_attention_mask(attention_mask)
-        msa_col_attention_mask = construct_col_attention(attention_mask)
-        assert msa_col_attention_mask.shape == (attention_scores.shape[0], 1, attention_scores.shape[2],
-                                                attention_scores.shape[3]), 'column mask shape mismatch'
-
+        attention_mask = bert_extended_attention_mask(attention_mask)
         attention_probs = self.scale_mask_softmax(attention_scores,
-                                                 msa_col_attention_mask)
+                                                  attention_mask)
 
         # manual_col_attention_mask = attention_mask.new_ones(attention_scores.shape[0], 1, attention_scores.shape[2], attention_scores.shape[3])
         # print('attention_scores.shape'*10, attention_scores.shape)
@@ -527,37 +507,6 @@ class ParallelRowSelfAttention(MegatronModule):
         (query_layer,
          key_layer,
          value_layer) = mpu.split_tensor_along_last_dim(mixed_x_layer, 3)
-        """
-        def compute_attention_weights(
-                self,
-                x,
-                scaling: float,
-                self_attn_mask=None,
-                self_attn_padding_mask=None,
-        ):
-            num_rows, num_cols, batch_size, embed_dim = x.size()
-            q = self.q_proj(x).view(num_rows, num_cols, batch_size, self.num_heads, self.head_dim)
-            k = self.k_proj(x).view(num_rows, num_cols, batch_size, self.num_heads, self.head_dim)
-            q *= scaling
-            if self_attn_padding_mask is not None:
-                # Zero out any padded aligned positions - this is important since
-                # we take a sum across the alignment axis.
-                q *= 1 - self_attn_padding_mask.permute(1, 2, 0).unsqueeze(3).unsqueeze(4).to(q)
-
-            attn_weights = torch.einsum(f"rinhd,rjnhd->{self.attn_shape}", q, k)
-
-            if self_attn_mask is not None:
-                raise NotImplementedError
-                # Mask Size: [B x R x C], Weights Size: [H x B x C x C]
-
-            if self_attn_padding_mask is not None:
-                attn_weights = attn_weights.masked_fill(
-                    self_attn_padding_mask[:, 0].unsqueeze(0).unsqueeze(2),
-                    -10000,
-                )
-
-            return attn_weights
-        """
 
         # ==================================
         # Adjust key and value for inference
@@ -641,10 +590,6 @@ class ParallelRowSelfAttention(MegatronModule):
         if get_key_value:
             output = [output, present]
 
-        # TODO: added return attention scores here
-        if get_args().compute_attn_weights:
-            return output, bias, attention_scores
-
         return output, bias
 
 
@@ -706,18 +651,17 @@ class ParallelTransformerLayer(MegatronModule):
                                                       output_layer_init_method,
                                                       layer_number)
         # TODO: restore col attention
-        self.col_attention = ParallelColumnSelfAttention(attention_mask_func, init_method,
-                                                         output_layer_init_method,
-                                                         layer_number)
-        # end comment
+        # self.col_attention = ParallelColumnSelfAttention(attention_mask_func, init_method,
+        #                                                  output_layer_init_method,
+        #                                                  layer_number)
+
         self.hidden_dropout = args.hidden_dropout
         self.bias_dropout_fusion = args.bias_dropout_fusion
 
-        # start comment
-        # Layernorm on the input data.
-        self.post_attention_layernorm = LayerNorm(
-            args.hidden_size,
-            eps=args.layernorm_epsilon)
+        # # Layernorm on the input data.
+        # self.post_attention_layernorm = LayerNorm(
+        #     args.hidden_size,
+        #     eps=args.layernorm_epsilon)
         # TODO: end col attention
 
         # MLP
@@ -735,20 +679,11 @@ class ParallelTransformerLayer(MegatronModule):
         # Layer norm at the begining of the transformer layer.
         layernorm_output = self.input_layernorm_row(hidden_states)
         # Self attention.
-
-        # TODO: added return attention scores here
-        if not get_args().compute_attn_weights:
-            attention_output, attention_bias = \
-                self.row_attention(layernorm_output,
-                                   row_attention_mask,
-                                   layer_past=layer_past,
-                                   get_key_value=get_key_value)
-        else:
-            attention_output, attention_bias, attention_scores = \
-                self.row_attention(layernorm_output,
-                                   row_attention_mask,
-                                   layer_past=layer_past,
-                                   get_key_value=get_key_value)
+        attention_output, attention_bias = \
+            self.row_attention(layernorm_output,
+                               row_attention_mask,
+                               layer_past=layer_past,
+                               get_key_value=get_key_value)
 
         if get_key_value:
             attention_output, presents = attention_output
@@ -786,48 +721,47 @@ class ParallelTransformerLayer(MegatronModule):
         # Self attention.
 
         # TODO: restore col attention
-        attention_output, attention_bias = \
-            self.col_attention(layernorm_output,
-                               # attention_mask,
-                               col_attention_mask,
-                               layer_past=layer_past,
-                               get_key_value=get_key_value)
+        # attention_output, attention_bias = \
+        #     self.col_attention(layernorm_output,
+        #                        # attention_mask,
+        #                        col_attention_mask,
+        #                        layer_past=layer_past,
+        #                        get_key_value=get_key_value)
 
 
-        if get_key_value:
-            attention_output, presents = attention_output
+        # if get_key_value:
+        #     attention_output, presents = attention_output
 
-        # Residual connection.
-        if self.apply_residual_connection_post_layernorm:
-            residual = layernorm_output
-        else:
-            residual = layernorm_input
+        # # Residual connection.
+        # if self.apply_residual_connection_post_layernorm:
+        #     residual = layernorm_output
+        # else:
+        #     residual = layernorm_input
 
-        # jit scripting for a nn.module (with dropout) is not
-        # trigerring the fusion kernel. For now, we use two
-        # different nn.functional routines to account for varying
-        # dropout semantics during training and inference phases.
-        if self.bias_dropout_fusion:
-            if self.training:
-                bias_dropout_add_func = bias_dropout_add_fused_train
-            else:
-                bias_dropout_add_func = bias_dropout_add_fused_inference
-        else:
-            bias_dropout_add_func = get_bias_dropout_add(self.training)
+        # # jit scripting for a nn.module (with dropout) is not
+        # # trigerring the fusion kernel. For now, we use two
+        # # different nn.functional routines to account for varying
+        # # dropout semantics during training and inference phases.
+        # if self.bias_dropout_fusion:
+        #     if self.training:
+        #         bias_dropout_add_func = bias_dropout_add_fused_train
+        #     else:
+        #         bias_dropout_add_func = bias_dropout_add_fused_inference
+        # else:
+        #     bias_dropout_add_func = get_bias_dropout_add(self.training)
 
-        # re-enable torch grad to enable fused optimization.
-        with torch.enable_grad():
-            layernorm_input = bias_dropout_add_func(
-                attention_output,
-                attention_bias.expand_as(residual),
-                residual,
-                self.hidden_dropout)
+        # # re-enable torch grad to enable fused optimization.
+        # with torch.enable_grad():
+        #     layernorm_input = bias_dropout_add_func(
+        #         attention_output,
+        #         attention_bias.expand_as(residual),
+        #         residual,
+        #         self.hidden_dropout)
 
-        # Layer norm post the self attention.
-        layernorm_output = self.post_attention_layernorm(layernorm_input)
+        # # Layer norm post the self attention.
+        # layernorm_output = self.post_attention_layernorm(layernorm_input)
 
         # TODO: end col attention
-
 
         # MLP.
         mlp_output, mlp_bias = self.mlp(layernorm_output)
@@ -849,11 +783,7 @@ class ParallelTransformerLayer(MegatronModule):
         if get_key_value:
             output = [output, presents]
 
-        # TODO: added return attention scores here
-        if get_args().compute_attn_weights:
-            return output, attention_scores
-        else:
-            return output
+        return output
 
 
 class ParallelTransformer(MegatronModule):
@@ -869,9 +799,6 @@ class ParallelTransformer(MegatronModule):
         # Store activation checkpoiting flag.
         self.checkpoint_activations = args.checkpoint_activations
         self.checkpoint_num_layers = args.checkpoint_num_layers
-
-        # TODO: added return attention scores here
-        self.attn_layers = dict()
 
         # Number of layers.
         assert args.num_layers % mpu.get_pipeline_model_parallel_world_size() == 0, \
@@ -898,23 +825,15 @@ class ParallelTransformer(MegatronModule):
     def _get_layer(self, layer_number):
         return self.layers[layer_number]
 
-    def _checkpointed_forward(self, hidden_states, row_attention_mask, col_attention_mask):
+    def _checkpointed_forward(self, hidden_states, row_attention_mask, col_attention_mask,):
         """Forward method with activation checkpointing."""
 
         def custom(start, end):
             def custom_forward(*inputs):
-                compute_attn_weights = get_args().compute_attn_weights
                 x_ = inputs[0]
                 for index in range(start, end):
                     layer = self._get_layer(index)
-                    # x_ = layer(x_, inputs[1])
-                    # NOTE DEBUGGING Modification: CHECKPOINT FORWARDING
-                    x_ = layer(x_, inputs[1], inputs[2])
-                    if compute_attn_weights:
-                        # self.attn_layers.append(x_[1])
-                        self.attn_layers[index] = x_[1].float().cpu()
-                        x_ = x_[0]
-
+                    x_ = layer(x_, inputs[1])
                 return x_
 
             return custom_forward
@@ -955,7 +874,6 @@ class ParallelTransformer(MegatronModule):
             else:
                 hidden_states = hidden_states.transpose(0, 1).contiguous()
 
-
         if self.checkpoint_activations:
             row_attention_mask, col_attention_mask,
             # hidden_states = self._checkpointed_forward(hidden_states,
@@ -975,9 +893,6 @@ class ParallelTransformer(MegatronModule):
                                       row_attention_mask, col_attention_mask,
                                       layer_past=past,
                                       get_key_value=get_key_value)
-                # TODO: support checkpoint activation
-                self.attn_layers[index] = hidden_states[1]
-
                 if get_key_value:
                     hidden_states, present = hidden_states
                     presents.append(present)
@@ -985,23 +900,11 @@ class ParallelTransformer(MegatronModule):
         # Final layer norm.
         if mpu.is_pipeline_last_stage():
             # Reverting data format change [s b h] --> [b s h].
-            # TODO: add attention layers
-            # REMOVE
-            # hidden_states = hidden_states.transpose(0, 1).contiguous()
-
-            # ADD
-            hidden_states, attn_layers = hidden_states
             hidden_states = hidden_states.transpose(0, 1).contiguous()
-            # END ADD
-
             output = self.final_layernorm(hidden_states)
-
         else:
             output = hidden_states
         if get_key_value:
             output = [output, presents]
 
-        if get_args().compute_attn_weights:
-            return output, self.attn_layers
-        else:
-            return output
+        return output

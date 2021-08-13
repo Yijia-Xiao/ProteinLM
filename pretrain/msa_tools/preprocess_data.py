@@ -87,6 +87,9 @@ class Encoder(object):
             if self.args.append_eod:
                 doc_ids[-1].append(Encoder.tokenizer.eod)
             ids[key] = doc_ids
+        # print(type(ids), type(json_line))
+        # print(ids, json_line)
+        # print(len(ids['text']))
         return ids, len(json_line)
 
 def get_args():
@@ -154,7 +157,7 @@ def main():
     # print(tokenizer)
     pool = multiprocessing.Pool(args.workers, initializer=encoder.initializer)
     encoded_docs = pool.imap(encoder.encode, fin, 25)
-    #encoded_docs = map(encoder.encode, fin)
+    # encoded_docs = map(encoder.encode, fin)
     # print(encoded_docs)
     # for f in encoded_docs:
     #     print(f)
@@ -185,7 +188,11 @@ def main():
         total_bytes_processed += bytes_processed
         for key, sentences in doc.items():
             for sentence in sentences:
+                # print(torch.IntTensor(sentence))
+                # tensor([5, 5, 5, ..., 20, 20, 20], dtype=torch.int32)
+                # TODO: change other data types, match uint8
                 builders[key].add_item(torch.IntTensor(sentence))
+                # builders[key].add_item(torch.tensor(sentence, dtype=torch.int8))
             builders[key].end_document()
         if i % args.log_interval == 0:
             current = time.time()

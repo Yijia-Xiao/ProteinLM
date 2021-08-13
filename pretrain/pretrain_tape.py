@@ -90,6 +90,12 @@ def get_batch(data_iterator):
         reset_position_ids=True,
         reset_attention_mask=True)
     attention_mask = attention_mask.squeeze(0).squeeze(0)
+    print('start save')
+    for idx, obj in enumerate([tokens, loss_mask, lm_labels, padding_mask, attention_mask, position_ids]):
+        print('saving')
+        torch.save(obj, f'/dataset/f0a0efb9/protein/msa/protein-msa/pretrain/pt/{idx}.pt')
+    # save pts to check shape and values
+    # exit(0)
     return tokens, loss_mask, lm_labels, padding_mask, attention_mask, position_ids
 
 
@@ -106,6 +112,7 @@ def forward_step(data_iterator, model, input_tensor):
     print(attention_mask.shape)
 
     extended_attention_mask = bert_extended_attention_mask(padding_mask) + attention_mask
+    print('extended_attention_mask', extended_attention_mask)
     # print(extended_attention_mask.shape)
     # debug
     extended_attention_mask = attention_mask

@@ -18,20 +18,16 @@ for p in itertools.permutations(tokens):
     if cnt == DEPTH * LENGTH:
         break
 
-# print(len(tot))
-
 repeat = (DEPTH * LENGTH) // len(tokens)
-# exit(0)
 
 for p in tot:
-    # p_str = ' '.join(p * repeat)
     duplicate = [i for i in p for c in range(repeat)]
     duplicate.insert(repeat, '|')
     p_str = ' '.join(duplicate)
     print('{"text": "' + p_str + '"}')
+
 exit(0)
 
-# folderpath = '/dataset/f0a0efb9/protein/msa/protein-msa/pretrain/msa/a2m'
 folderpath = sys.argv[1]
 
 msa = []
