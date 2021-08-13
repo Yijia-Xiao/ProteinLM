@@ -138,6 +138,7 @@ class _BertWordPieceTokenizer(AbstractTokenizer):
         self.sep_id = self.tokenizer.vocab['[SEP]']
         self.pad_id = self.tokenizer.vocab['[PAD]']
         self.mask_id = self.tokenizer.vocab['[MASK]']
+        self.msa_sep_id = self.tokenizer.vocab['|']
 
     @property
     def vocab_size(self):
@@ -184,6 +185,10 @@ class _BertWordPieceTokenizer(AbstractTokenizer):
     @property
     def mask(self):
         return self.mask_id
+
+    @property
+    def msa_sep(self):
+        return self.msa_sep_id
 
 
 class _GPT2BPETokenizer(AbstractTokenizer):
