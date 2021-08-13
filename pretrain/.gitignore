@@ -9,3 +9,12 @@ dist/
 
 # helpers.so for data processing
 helpers.*.so
+examples/
+data/
+!/megatron/data
+tb/
+msa_tools/*.bin
+msa_tools/*.idx
+msa_tools/*.json
+ckpt/
+local_scripts/
