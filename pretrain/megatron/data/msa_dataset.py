@@ -233,6 +233,7 @@ def build_training_sample(sample,
     #     truncated = True
 
     # MSA: extend depth to max
+    # TODO: MSA remove shallow MSA
     if msa_depth < ARGS_MSA_DEPTH:
         p = []
         # index for query sequence (0) in MSA
@@ -264,6 +265,7 @@ def build_training_sample(sample,
 
     tokens_matrix_with_cls = tokens_matrix_without_cls.copy()
     tokens_matrix_with_cls[:, 0] = cls_id
+    msa_tokens = tokens_matrix_with_cls
 
     # target_seq_length = sum([len(_) + 1 for _ in sample])
     # assert target_seq_length <= max_seq_length
