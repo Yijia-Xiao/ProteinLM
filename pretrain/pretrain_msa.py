@@ -33,6 +33,17 @@ from megatron.utils import get_tape_masks_and_position_ids
 
 # from megatron.model.bert_model import bert_extended_attention_mask
 
+class Counter(object):
+    __count = 0
+
+    @classmethod
+    def get_count(cls):
+        return cls.__count
+
+    @classmethod
+    def add_count(cls):
+        cls.__count += 1
+
 
 def model_provider():
     """Build the model."""
@@ -144,8 +155,13 @@ def forward_step(data_iterator, model, input_tensor):
 
     # extended_attention_mask, position_ids = msa_mask, msa_position_ids
     position_ids = msa_position_ids
-    row_attention_mask, rol_attention_mask = padding_mask, padding_mask.transpose(0, 1)
+    # row_attention_mask, col_attention_mask = padding_mask, padding_mask.transpose(0, 1)
 
+    # construct_row = torch.zeros(ARGS_MAX_DEPTH, ARGS_MAX_LENGTH, device=device, dtype=datatype)
+    # construct_row[:msa_depth, :msa_length] = 1
+    # assert construct_row == padding_mask
+    msa_attn = True if args.msa_attn else False
+    msa_depth_length = torch.tensor([msa_depth, msa_length, 1 if msa_attn else 0], device=device, dtype=datatype)
     # TODO: check extend attention mask
     # extended_attention_mask = (msa_depth, msa_length)
 
@@ -153,16 +169,31 @@ def forward_step(data_iterator, model, input_tensor):
     if mpu.is_pipeline_first_stage():
         assert input_tensor is None
         if mpu.is_pipeline_last_stage():
-            output_tensor = model(tokens, (row_attention_mask, rol_attention_mask), tokentype_ids=None,
+            output_tensor = model(tokens, msa_depth_length, tokentype_ids=None,
                                   lm_labels=lm_labels, position_ids=position_ids)
         else:
-            output_tensor = model(tokens, (row_attention_mask, rol_attention_mask), tokentype_ids=None)
+            output_tensor = model(tokens, msa_depth_length, tokentype_ids=None)
     elif mpu.is_pipeline_last_stage():
         assert input_tensor is not None
-        output_tensor = model(input_tensor, (row_attention_mask, rol_attention_mask), lm_labels=lm_labels)
+        output_tensor = model(input_tensor, msa_depth_length, lm_labels=lm_labels)
     else:
         assert input_tensor is not None
-        output_tensor = model(input_tensor, (row_attention_mask, rol_attention_mask), position_ids=position_ids)
+        output_tensor = model(input_tensor, msa_depth_length, position_ids=position_ids)
+
+    if args.msa_attn:
+        output_tensor, msa_attn_probs = output_tensor
+
+        attn_path = get_args().attn_save
+        attn_save_freq = get_args().attn_save_freq
+        idx = Counter.get_count()
+        import os
+        pid = os.getpid()
+        if idx % attn_save_freq == 0:
+            print_rank_0(f'saving to {attn_path}/attn_weights_{idx:09d}.pt')
+            os.system(f'mkdir -p {attn_path}/{pid}')
+            torch.save(msa_attn_probs, f'{attn_path}/{pid}/msa_attn_probs_{idx:09d}.pt')
+        Counter.add_count()
+        # print('msa_attn_probs', msa_attn_probs[0].shape)
 
     if mpu.is_pipeline_last_stage():
         lm_loss_, _ = output_tensor

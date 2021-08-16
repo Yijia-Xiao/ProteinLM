@@ -27,6 +27,7 @@ from megatron.model import import_layernorm
 from megatron.model.fused_softmax import FusedScaleMaskSoftmax, FusedReducedScaleMaskSoftmax
 from megatron.model.fused_bias_gelu import bias_gelu_impl
 from megatron.model.utils import openai_gelu, erf_gelu
+# from megatron.model.bert_model import bert_extended_attention_mask
 
 # flags required to enable jit fusion kernels
 torch._C._jit_set_profiling_mode(False)
@@ -54,6 +55,23 @@ torch._C._jit_override_can_fuse_on_gpu(True)
                masked-attention-scores = attention_mask_func(
                                      unmaksed-attention-scores, attention-mask)
 """
+
+
+def bert_extended_attention_mask(attention_mask):
+    # We create a 3D attention mask from a 2D tensor mask.
+    # [b, 1, s]
+    attention_mask_b1s = attention_mask.unsqueeze(1)
+    # [b, s, 1]
+    attention_mask_bs1 = attention_mask.unsqueeze(2)
+    # [b, s, s]
+    attention_mask_bss = attention_mask_b1s * attention_mask_bs1
+    # [b, 1, s, s]
+    extended_attention_mask = attention_mask_bss.unsqueeze(1)
+
+    # Convert attention mask to binary:
+    extended_attention_mask = (extended_attention_mask < 0.5)
+
+    return extended_attention_mask
 
 
 class ParallelMLP(MegatronModule):
@@ -469,7 +487,7 @@ class ParallelRowSelfAttention(MegatronModule):
         return mixed_layer
 
     def forward(self, hidden_states, attention_mask, layer_past=None,
-                get_key_value=False):
+                get_key_value=False, msa_attn=False):
         # hidden_states: [sq, b, h]
 
         # =====================
@@ -581,7 +599,10 @@ class ParallelRowSelfAttention(MegatronModule):
         if get_key_value:
             output = [output, present]
 
-        return output, bias
+        if msa_attn:
+            return output, bias, attention_probs
+        else:
+            return output, bias
 
 
 def bias_dropout_add(x, bias, residual, prob, training):
@@ -623,6 +644,8 @@ class ParallelTransformerLayer(MegatronModule):
 
         super(ParallelTransformerLayer, self).__init__()
         self.layer_number = layer_number
+        self.ARGS_MAX_DEPTH = args.msa_depth
+        self.ARGS_MAX_LENGTH = args.msa_length
 
         self.apply_residual_connection_post_layernorm \
             = args.apply_residual_connection_post_layernorm
@@ -657,7 +680,8 @@ class ParallelTransformerLayer(MegatronModule):
         self.mlp = ParallelMLP(init_method,
                                output_layer_init_method)
 
-    def forward(self, hidden_states, row_col_attention_mask, layer_past=None,
+    # def forward(self, hidden_states, row_col_attention_mask, layer_past=None,
+    def forward(self, hidden_states, msa_depth_length_attn, layer_past=None,
                 get_key_value=False):
         # hidden_states: [b, s, h]
 
@@ -666,13 +690,36 @@ class ParallelTransformerLayer(MegatronModule):
         layernorm_output = self.input_layernorm_row(hidden_states)
         # Self attention.
 
-        row_attention_mask = row_col_attention_mask[0]
-        col_attention_mask = row_col_attention_mask[1]
-        attention_output, attention_bias = \
-            self.row_attention(layernorm_output,
-                               row_attention_mask,
-                               layer_past=layer_past,
-                               get_key_value=get_key_value)
+        # row_attention_mask = row_col_attention_mask[0]
+        # col_attention_mask = row_col_attention_mask[1]
+        # msa_attn = row_col_attention_mask[2]
+        #
+        msa_depth = msa_depth_length_attn[0]
+        msa_length = msa_depth_length_attn[1]
+        msa_attn = True if msa_depth_length_attn[2] else False
+        # row_padding_mask, col_padding_mask = attention_mask[0], attention_mask[1]
+        row_padding_mask = torch.zeros(self.ARGS_MAX_DEPTH, self.ARGS_MAX_LENGTH, device=msa_depth.device, dtype=msa_depth.dtype)
+        row_padding_mask[:msa_depth, :msa_length] = 1
+        col_padding_mask = row_padding_mask.clone().transpose(0, 1)
+
+        extended_row_attention_mask = bert_extended_attention_mask(row_padding_mask) if \
+            row_padding_mask.dim() == 2 else row_padding_mask
+        extended_col_attention_mask = bert_extended_attention_mask(col_padding_mask) if \
+            col_padding_mask.dim() == 2 else col_padding_mask
+
+        if msa_attn:
+            attention_output, attention_bias, attn_probs = \
+                self.row_attention(layernorm_output,
+                                   extended_row_attention_mask,
+                                   layer_past=layer_past,
+                                   get_key_value=get_key_value,
+                                   msa_attn=msa_attn)
+        else:
+            attention_output, attention_bias = \
+                self.row_attention(layernorm_output,
+                                   extended_row_attention_mask,
+                                   layer_past=layer_past,
+                                   get_key_value=get_key_value)
 
         if get_key_value:
             attention_output, presents = attention_output
@@ -709,7 +756,7 @@ class ParallelTransformerLayer(MegatronModule):
         # Self attention.
         attention_output, attention_bias = \
             self.col_attention(layernorm_output,
-                               col_attention_mask,
+                               extended_col_attention_mask,
                                layer_past=layer_past,
                                get_key_value=get_key_value)
 
@@ -765,7 +812,10 @@ class ParallelTransformerLayer(MegatronModule):
         if get_key_value:
             output = [output, presents]
 
-        return output
+        if msa_attn:
+            return output, attn_probs
+        else:
+            return output
 
 
 class ParallelTransformer(MegatronModule):
@@ -786,6 +836,8 @@ class ParallelTransformer(MegatronModule):
         assert args.num_layers % mpu.get_pipeline_model_parallel_world_size() == 0, \
             'num_layers must be divisible by pipeline_model_parallel_size'
         self.num_layers = args.num_layers // mpu.get_pipeline_model_parallel_world_size()
+        self.msa_attn = args.msa_attn
+        self.msa_attn_probs = dict()
 
         # Transformer layers.
         def build_layer(layer_number):
@@ -813,9 +865,14 @@ class ParallelTransformer(MegatronModule):
         def custom(start, end):
             def custom_forward(*inputs):
                 x_ = inputs[0]
+
                 for index in range(start, end):
                     layer = self._get_layer(index)
                     x_ = layer(x_, inputs[1])
+                    if self.msa_attn:
+                        # x_, attn_probs = x_
+                        self.msa_attn_probs[index] = x_[1].float().cpu()
+                        x_ = x_[0]
                 return x_
 
             return custom_forward
@@ -827,6 +884,7 @@ class ParallelTransformer(MegatronModule):
             hidden_states = mpu.checkpoint(
                 custom(l, l + self.checkpoint_num_layers),
                 hidden_states, attention_mask)
+
             l += self.checkpoint_num_layers
 
         return hidden_states
@@ -864,10 +922,15 @@ class ParallelTransformer(MegatronModule):
                 past = None
                 if layer_past is not None:
                     past = layer_past[index]
+                # TODO change attn_probs
                 hidden_states = layer(hidden_states,
                                       attention_mask,
                                       layer_past=past,
                                       get_key_value=get_key_value)
+                if self.msa_attn:
+                    hidden_states, attn_probs = hidden_states
+                    self.msa_attn_probs[index] = attn_probs
+
                 if get_key_value:
                     hidden_states, present = hidden_states
                     presents.append(present)
@@ -882,4 +945,7 @@ class ParallelTransformer(MegatronModule):
         if get_key_value:
             output = [output, presents]
 
-        return output
+        if self.msa_attn:
+            return output, self.msa_attn_probs
+        else:
+            return output

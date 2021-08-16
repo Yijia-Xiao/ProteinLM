@@ -289,6 +289,7 @@ class TransformerLanguageModelBase(MegatronModule):
         self.num_tokentypes = num_tokentypes
         self.init_method = init_method
         self.add_pooler = add_pooler
+        self.msa_attn = args.msa_attn
 
         # Embeddings.
         if mpu.is_pipeline_first_stage():
@@ -331,6 +332,8 @@ class TransformerLanguageModelBase(MegatronModule):
                                               get_key_value=get_key_value)
 
         if mpu.is_pipeline_last_stage() and self.add_pooler:
+            if self.msa_attn:
+                raise NotImplementedError
             pooled_output = self.pooler(transformer_output,
                                         pooling_sequence_index)
             return transformer_output, pooled_output

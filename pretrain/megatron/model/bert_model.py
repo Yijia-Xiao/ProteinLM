@@ -138,6 +138,9 @@ class BertModelBase(MegatronModule):
         self.fp16_lm_cross_entropy = args.fp16_lm_cross_entropy
         self.add_binary_head = add_binary_head
         self.parallel_output = parallel_output
+        self.msa_attn = args.msa_attn
+        # self.ARGS_MAX_DEPTH = args.msa_depth
+        # self.ARGS_MAX_LENGTH = args.msa_length
 
         init_method = init_method_normal(args.init_method_std)
         scaled_init_method = scaled_init_method_normal(args.init_method_std,
@@ -165,12 +168,12 @@ class BertModelBase(MegatronModule):
     def forward(self, bert_model_input, attention_mask,
                 tokentype_ids=None, lm_labels=None, position_ids=None):
 
+
         # extended_attention_mask = bert_extended_attention_mask(attention_mask) if attention_mask.dim() == 2 else attention_mask
-        row_padding_mask, col_padding_mask = attention_mask[0], attention_mask[1]
-        extended_row_attention_mask = bert_extended_attention_mask(row_padding_mask) if \
-            row_padding_mask.dim() == 2 else row_padding_mask
-        extended_col_attention_mask = bert_extended_attention_mask(col_padding_mask) if \
-            col_padding_mask.dim() == 2 else col_padding_mask
+        # attention_mask: msa_depth_length
+
+        assert attention_mask.shape == (3, )
+        msa_attn = self.msa_attn
 
         kwargs = {}
         if mpu.is_pipeline_first_stage():
@@ -178,24 +181,36 @@ class BertModelBase(MegatronModule):
             if position_ids is None:
                 position_ids = bert_position_ids(input_ids)
             # args = [input_ids, position_ids, extended_row_attention_mask]
-            args = [input_ids, position_ids, (extended_row_attention_mask, extended_col_attention_mask)]
+            # TODO: MSA change attention mask (tensor) to tuple (row_attn, col_attn, msa_attn)
+            args = [input_ids, position_ids, attention_mask]
             kwargs['tokentype_ids'] = tokentype_ids
         else:
             # args = [bert_model_input, extended_row_attention_mask]
-            args = [bert_model_input, (extended_row_attention_mask, extended_col_attention_mask)]
+            args = [bert_model_input, attention_mask]
         lm_output = self.language_model(*args, **kwargs)
+        if msa_attn:
+            lm_output, msa_attn_probs = lm_output
         if mpu.is_pipeline_last_stage() and self.add_binary_head:
             lm_output, pooled_output = lm_output
         else:
             pooled_output = None
 
         if mpu.is_pipeline_last_stage():
-            return post_language_model_processing(lm_output, pooled_output,
-                                                  self.lm_head, self.binary_head,
-                                                  lm_labels,
-                                                  self.word_embeddings_weight(),
-                                                  self.fp16_lm_cross_entropy)
+            # post_language_model_processing return a tuple of 2
+            tuple_of_lm_loss_other = post_language_model_processing(lm_output, pooled_output,
+                                                      self.lm_head, self.binary_head,
+                                                      lm_labels,
+                                                      self.word_embeddings_weight(),
+                                                      self.fp16_lm_cross_entropy)
+            if msa_attn:
+                return tuple_of_lm_loss_other, msa_attn_probs
+            else:
+                # tuple_of_lm_loss_other is original return value
+                return tuple_of_lm_loss_other
         else:
+            if msa_attn:
+                # data pipeline and MSA attention error
+                raise NotImplementedError
             return lm_output
 
 
@@ -248,7 +263,7 @@ class BertModel(BertModelBase):
             parallel_output=parallel_output)
 
     def forward(self, input_ids, attention_mask,
-                tokentype_ids=None, lm_labels=None, position_ids=None):
+                tokentype_ids=None, lm_labels=None, position_ids=None, msa_attn=False):
         return super(BertModel, self).forward(
             input_ids,
             attention_mask,
@@ -294,7 +309,9 @@ class BertModelLastStage(BertModelBase):
             parallel_output=parallel_output)
 
     def forward(self, hidden_state, attention_mask,
-                lm_labels=None):
+                lm_labels=None, msa_attn=False):
+        if msa_attn:
+            raise NotImplementedError
         return super(BertModelLastStage, self).forward(
             hidden_state,
             attention_mask,

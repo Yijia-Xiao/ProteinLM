@@ -619,7 +619,8 @@ def _add_msa_args(parser):
                        help="Maximum MSA length to process.")
     group.add_argument('--msa-shuffle', type=int, default=1,
                        help="Whether shuffle MSA, 1 for shuffle, 0 for no shuffle")
-    group.add_argument('--compute-attn-weights', action='store_true',
+    # group.add_argument('--compute-attn-weights', action='store_true',
+    group.add_argument('--msa-attn', action='store_true',
                        help='Compute attention weights.')
     group.add_argument('--attn-save', type=str, default=None,
                        help='Output directory to save attention weights to.')
