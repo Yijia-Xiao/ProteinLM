@@ -109,6 +109,7 @@ def get_batch(data_iterator):
     #                       (0, ARGS_MAX_LENGTH - msa_length, 0, ARGS_MAX_DEPTH - msa_depth), 'constant', -1)
 
     # TODO: Note: (batch_size, msa_depth. msa_length)
+    assert len(tokens) == 1
     tokens, loss_mask, lm_labels, padding_mask = tokens[0], loss_mask[0], lm_labels[0], padding_mask[0]
 
     assert tokens.shape[-2:] == ARGS_MSA_SHAPE
@@ -138,13 +139,14 @@ def forward_step(data_iterator, model, input_tensor):
     ARGS_MAX_DEPTH, ARGS_MAX_LENGTH = args.msa_depth, args.msa_length
     device = msa_depth.device
     # mask: False for valid tokens
-    msa_mask = torch.ones((ARGS_MAX_DEPTH, ARGS_MAX_LENGTH), device=device).bool()
-    msa_mask[: msa_depth, :msa_length] = False
+    # msa_mask = torch.ones((ARGS_MAX_DEPTH, ARGS_MAX_LENGTH), device=device).bool()
+    # msa_mask[: msa_depth, :msa_length] = False
     msa_position_ids = torch.arange(ARGS_MAX_LENGTH, dtype=datatype, device=device).repeat(ARGS_MAX_DEPTH, 1)
 
     # extended_attention_mask, position_ids = msa_mask, msa_position_ids
     position_ids = msa_position_ids
-    row_attention_mask, rol_attention_mask = padding_mask, padding_mask.transpose(0, 1)
+    # row_attention_mask, col_attention_mask = padding_mask, padding_mask.transpose(0, 1)
+    msa_shape_dep_len = torch.tensor([msa_depth, msa_length], device=device, dtype=datatype)
 
     # TODO: check extend attention mask
     # extended_attention_mask = (msa_depth, msa_length)
@@ -153,16 +155,16 @@ def forward_step(data_iterator, model, input_tensor):
     if mpu.is_pipeline_first_stage():
         assert input_tensor is None
         if mpu.is_pipeline_last_stage():
-            output_tensor = model(tokens, (row_attention_mask, rol_attention_mask), tokentype_ids=None,
+            output_tensor = model(tokens, msa_shape_dep_len, tokentype_ids=None,
                                   lm_labels=lm_labels, position_ids=position_ids)
         else:
-            output_tensor = model(tokens, (row_attention_mask, rol_attention_mask), tokentype_ids=None)
+            output_tensor = model(tokens, msa_shape_dep_len, tokentype_ids=None)
     elif mpu.is_pipeline_last_stage():
         assert input_tensor is not None
-        output_tensor = model(input_tensor, (row_attention_mask, rol_attention_mask), lm_labels=lm_labels)
+        output_tensor = model(input_tensor, msa_shape_dep_len, lm_labels=lm_labels)
     else:
         assert input_tensor is not None
-        output_tensor = model(input_tensor, (row_attention_mask, rol_attention_mask), position_ids=position_ids)
+        output_tensor = model(input_tensor, msa_shape_dep_len, position_ids=position_ids)
 
     if mpu.is_pipeline_last_stage():
         lm_loss_, _ = output_tensor

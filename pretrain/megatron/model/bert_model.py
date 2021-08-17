@@ -165,12 +165,8 @@ class BertModelBase(MegatronModule):
     def forward(self, bert_model_input, attention_mask,
                 tokentype_ids=None, lm_labels=None, position_ids=None):
 
+        assert attention_mask.shape == (2, )
         # extended_attention_mask = bert_extended_attention_mask(attention_mask) if attention_mask.dim() == 2 else attention_mask
-        row_padding_mask, col_padding_mask = attention_mask[0], attention_mask[1]
-        extended_row_attention_mask = bert_extended_attention_mask(row_padding_mask) if \
-            row_padding_mask.dim() == 2 else row_padding_mask
-        extended_col_attention_mask = bert_extended_attention_mask(col_padding_mask) if \
-            col_padding_mask.dim() == 2 else col_padding_mask
 
         kwargs = {}
         if mpu.is_pipeline_first_stage():
@@ -178,11 +174,11 @@ class BertModelBase(MegatronModule):
             if position_ids is None:
                 position_ids = bert_position_ids(input_ids)
             # args = [input_ids, position_ids, extended_row_attention_mask]
-            args = [input_ids, position_ids, (extended_row_attention_mask, extended_col_attention_mask)]
+            args = [input_ids, position_ids, attention_mask]
             kwargs['tokentype_ids'] = tokentype_ids
         else:
             # args = [bert_model_input, extended_row_attention_mask]
-            args = [bert_model_input, (extended_row_attention_mask, extended_col_attention_mask)]
+            args = [bert_model_input, attention_mask]
         lm_output = self.language_model(*args, **kwargs)
         if mpu.is_pipeline_last_stage() and self.add_binary_head:
             lm_output, pooled_output = lm_output

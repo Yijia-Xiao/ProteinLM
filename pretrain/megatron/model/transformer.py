@@ -56,6 +56,34 @@ torch._C._jit_override_can_fuse_on_gpu(True)
 """
 
 
+def bert_extended_attention_mask(attention_mask):
+    # We create a 3D attention mask from a 2D tensor mask.
+    # [b, 1, s]
+    attention_mask_b1s = attention_mask.unsqueeze(1)
+    # [b, s, 1]
+    attention_mask_bs1 = attention_mask.unsqueeze(2)
+    # [b, s, s]
+    attention_mask_bss = attention_mask_b1s * attention_mask_bs1
+    # [b, 1, s, s]
+    extended_attention_mask = attention_mask_bss.unsqueeze(1)
+
+    # Convert attention mask to binary:
+    extended_attention_mask = (extended_attention_mask < 0.5)
+
+    return extended_attention_mask
+
+
+class Counter(object):
+    __count = 0
+
+    @classmethod
+    def get_count(cls):
+        return cls.__count
+
+    @classmethod
+    def add_count(cls):
+        cls.__count += 1
+
 class ParallelMLP(MegatronModule):
     """MLP.
 
@@ -623,6 +651,8 @@ class ParallelTransformerLayer(MegatronModule):
 
         super(ParallelTransformerLayer, self).__init__()
         self.layer_number = layer_number
+        self.ARGS_MAX_DEPTH = args.msa_depth
+        self.ARGS_MAX_LENGTH = args.msa_length
 
         self.apply_residual_connection_post_layernorm \
             = args.apply_residual_connection_post_layernorm
@@ -657,7 +687,8 @@ class ParallelTransformerLayer(MegatronModule):
         self.mlp = ParallelMLP(init_method,
                                output_layer_init_method)
 
-    def forward(self, hidden_states, row_col_attention_mask, layer_past=None,
+    # rename attention mask (bool tensor) -> msa_shape_dep_len ((tensor[d, l]))
+    def forward(self, hidden_states, msa_shape_dep_len, layer_past=None,
                 get_key_value=False):
         # hidden_states: [b, s, h]
 
@@ -666,11 +697,24 @@ class ParallelTransformerLayer(MegatronModule):
         layernorm_output = self.input_layernorm_row(hidden_states)
         # Self attention.
 
-        row_attention_mask = row_col_attention_mask[0]
-        col_attention_mask = row_col_attention_mask[1]
+        # row_attention_mask = row_col_attention_mask[0]
+        # col_attention_mask = row_col_attention_mask[1]
+        msa_depth = msa_shape_dep_len[0]
+        msa_length = msa_shape_dep_len[1]
+
+        row_padding_mask = torch.zeros(self.ARGS_MAX_DEPTH, self.ARGS_MAX_LENGTH, device=msa_depth.device, dtype=msa_depth.dtype)
+        row_padding_mask[:msa_depth, :msa_length] = 1
+        col_padding_mask = row_padding_mask.clone().transpose(0, 1)
+
+        extended_row_attention_mask = bert_extended_attention_mask(row_padding_mask) if \
+            row_padding_mask.dim() == 2 else row_padding_mask
+        extended_col_attention_mask = bert_extended_attention_mask(col_padding_mask) if \
+            col_padding_mask.dim() == 2 else col_padding_mask
+
+
         attention_output, attention_bias = \
             self.row_attention(layernorm_output,
-                               row_attention_mask,
+                               extended_row_attention_mask,
                                layer_past=layer_past,
                                get_key_value=get_key_value)
 
@@ -709,7 +753,7 @@ class ParallelTransformerLayer(MegatronModule):
         # Self attention.
         attention_output, attention_bias = \
             self.col_attention(layernorm_output,
-                               col_attention_mask,
+                               extended_col_attention_mask,
                                layer_past=layer_past,
                                get_key_value=get_key_value)
 
