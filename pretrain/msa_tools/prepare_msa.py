@@ -1,19 +1,20 @@
 import os
 import sys
+import tqdm
 
-# '/dataset/f0a0efb9/protein/msa/data/tiny'
 data_path=sys.argv[1]
-# print(os.listdir(PATH))
-
+MAX_DEPTH=int(sys.argv[2])
+MAX_LEN=int(sys.argv[3])
 
 files = os.listdir(data_path)
 
 data = []
 cnt = 0
-for fd in files:
+for fd in tqdm.tqdm(files):
     with open(os.path.join(data_path, fd)) as f:
         msa = f.readlines()
-        # sample = []
+        if len(msa) < MAX_DEPTH or len(msa[0]) < MAX_LEN:
+            continue
         sample = ""
         split_add = False
         for l in msa:
@@ -21,11 +22,6 @@ for fd in files:
             if not split_add:
                 sample += '|'
                 split_add = True
-        # cnt += 1
-        # if cnt == 2:
-        #     print(sample)
-        #     print(f)
-        #     exit(0)
         data.append(sample)
 
 for s in data:
