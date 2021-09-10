@@ -33,6 +33,26 @@ from megatron.utils import get_tape_masks_and_position_ids
 from megatron.model.bert_model import bert_extended_attention_mask
 
 
+class Collector(object):
+    __collect = list()
+
+    @classmethod
+    def append(cls, app):
+        cls.__collect.append(app)
+
+    @classmethod
+    def get_size(cls):
+        return len(cls.__collect)
+
+    @classmethod
+    def dump(cls, path):
+        torch.save(cls.__collect, path)
+
+    @classmethod
+    def clear(cls):
+        cls.__collect.clear()
+
+
 def model_provider():
     """Build the model."""
 
