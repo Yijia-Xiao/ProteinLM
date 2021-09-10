@@ -31,26 +31,7 @@ from megatron.utils import average_losses_across_data_parallel_group
 from megatron.utils import get_tape_masks_and_position_ids
 
 from megatron.model.bert_model import bert_extended_attention_mask
-
-
-class Collector(object):
-    __collect = list()
-
-    @classmethod
-    def append(cls, app):
-        cls.__collect.append(app)
-
-    @classmethod
-    def get_size(cls):
-        return len(cls.__collect)
-
-    @classmethod
-    def dump(cls, path):
-        torch.save(cls.__collect, path)
-
-    @classmethod
-    def clear(cls):
-        cls.__collect.clear()
+from megatron.model.transformer import Collector
 
 
 def model_provider():
@@ -146,6 +127,11 @@ def forward_step(data_iterator, model, input_tensor):
         assert input_tensor is not None
         output_tensor = model(input_tensor, extended_attention_mask, position_ids=position_ids)
 
+    # print_rank_0(Collector.get_size())
+    # if Collector.get_size() == 24:
+    #     Collector.dump('/workspace/plt/attention')
+    #     exit(0)
+
     if mpu.is_pipeline_last_stage():
         lm_loss_, _ = output_tensor
 
@@ -159,6 +145,7 @@ def forward_step(data_iterator, model, input_tensor):
         averaged_losses = average_losses_across_data_parallel_group([lm_loss,])
 
         return loss, {'lm loss': averaged_losses[0]}
+
     return output_tensor
 
 

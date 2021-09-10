@@ -16,6 +16,9 @@
 """Transformer."""
 
 import math
+import os
+
+import numpy
 import torch
 import torch.nn.functional as F
 
@@ -34,6 +37,32 @@ torch._C._jit_set_profiling_mode(False)
 torch._C._jit_set_profiling_executor(False)
 torch._C._jit_override_can_fuse_on_cpu(True)
 torch._C._jit_override_can_fuse_on_gpu(True)
+
+
+class Collector(object):
+    __collect = list()
+
+    @classmethod
+    def append(cls, app):
+        cls.__collect.append(app)
+
+    @classmethod
+    def get_size(cls):
+        return len(cls.__collect)
+
+    @classmethod
+    def dump(cls, path):
+        rank = mpu.get_data_parallel_rank()
+        torch.save(cls.__collect, os.path.join(path, str(rank) + '.pt'))
+        # with open(os.path.join(path, str(rank) + '.npy'), 'w') as f:
+        #     json.dump(cls.__collect, f)
+        # numpy.save(str(os.path.join(path, str(rank) + '.npy')), cls.__collect)
+        print_rank_0(f'file saved to {path}, dp = {rank}')
+
+    @classmethod
+    def clear(cls):
+        cls.__collect.clear()
+
 
 """ We use the following notation throughout this file:
      h: hidden size
@@ -280,7 +309,8 @@ class ParallelSelfAttention(MegatronModule):
 
         # change view to [b, np, sq, sk]
         attention_scores = matmul_result.view(*output_size)
-
+        # Collector.append(attention_scores[0].cpu().detach().numpy())
+        # Collector.append(attention_scores[0].cpu().detach())
 
         # ==================================================
         # Update attention mask for inference. [b, np, sq, sk]
