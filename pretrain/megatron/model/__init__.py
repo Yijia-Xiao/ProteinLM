@@ -34,6 +34,10 @@ from .bert_model import (BertModel,
                          BertModelFirstStage,
                          BertModelIntermediateStage,
                          BertModelLastStage)
+from .msa_model import (MSAModel,
+                        MSAModelFirstStage,
+                        MSAModelIntermediateStage,
+                        MSAModelLastStage)
 from .realm_model import ICTBertModel
 from .gpt_model import (GPTModel,
                         GPTModelFirstStage,

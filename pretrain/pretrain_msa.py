@@ -25,7 +25,7 @@ from megatron import print_rank_0
 from megatron import get_timers
 from megatron import mpu
 from megatron.data.msa_dataset import build_train_valid_test_datasets
-from megatron.model import BertModel, BertModelFirstStage, BertModelIntermediateStage, BertModelLastStage
+from megatron.model import MSAModel, MSAModelFirstStage, MSAModelIntermediateStage, MSAModelLastStage
 from megatron.training import pretrain
 from megatron.utils import average_losses_across_data_parallel_group
 from megatron.utils import get_tape_masks_and_position_ids
@@ -42,18 +42,18 @@ def model_provider():
     if mpu.get_pipeline_model_parallel_world_size() > 1:
         # Determine model based on position of stage in pipeline.
         if mpu.is_pipeline_first_stage():
-            model = BertModelFirstStage(
+            model = MSAModelFirstStage(
                 num_tokentypes=0)
         elif mpu.is_pipeline_last_stage():
-            model = BertModelLastStage(
+            model = MSAModelLastStage(
                 num_tokentypes=0,
                 add_binary_head=False,
                 parallel_output=True)
         else:
-            model = BertModelIntermediateStage(
+            model = MSAModelIntermediateStage(
                 num_tokentypes=0)
     else:
-        model = BertModel(
+        model = MSAModel(
             num_tokentypes=0,
             add_binary_head=False,
             parallel_output=True)
