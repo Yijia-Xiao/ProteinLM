@@ -280,7 +280,7 @@ def create_masked_lm_predictions(tokens,
 
             masked_token = None
             # 80% of the time, replace with [MASK]
-            if np_rng.random() < 0.8:
+            if True: # np_rng.random() < 0.8:
                 masked_token = mask_id
             else:
                 # 10% of the time, keep original

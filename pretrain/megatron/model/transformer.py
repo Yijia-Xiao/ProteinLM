@@ -332,6 +332,9 @@ class ParallelSelfRowAttention(MegatronModule):
         # attention scores and attention mask [b, np, sq, sk]
         attention_probs = self.scale_mask_softmax(attention_scores,
                                                   attention_mask)
+        M = attention_probs.size(0)
+        attention_probs = torch.sum(attention_probs, dim=0).repeat(M, 1, 1, 1)
+        attention_probs /= math.sqrt(M)
 
         # This is actually dropping out entire tokens to attend to, which might
         # seem a bit unusual, but is taken from the original Transformer paper.
