@@ -155,7 +155,7 @@ def get_tape_masks_and_position_ids(data,
                                     reset_position_ids,
                                     reset_attention_mask):
     """Build masks and position id for (bidirected) tape model, where multiple protein sequences are concatinated to a single sequences, like
-    [CLS] seq1 [CLS] seq2 [CLS] seq3 ...
+    <cls> seq1 <cls> seq2 <cls> seq3 ...
     We do this mainly because protein sequences has various lengths, ranging from 100 to 10000. 
     We want to avoid too many padding tokens, so we concat short seqs as many as possible until it reaches the max_seq_length limit.
     Consequently, the attention mask should be (1 - a block diaganol matrix), and position ids should be recalculated for each subseq.

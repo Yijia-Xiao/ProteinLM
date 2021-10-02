@@ -14,7 +14,7 @@ def compute_precision_at_l5(seq_lens, predictions, labels, ignore_index=-1, retu
         total = 0
         for seq_len, prob, label, mask in zip(seq_lens, probs, labels, valid_masks):
             masked_prob = (prob * mask).view(-1)
-            seq_len = seq_len.item() - 1 # -1 because of the [CLS]
+            seq_len = seq_len.item() - 1 # -1 because of the <cls>
             most_likely = masked_prob.topk(seq_len // 5, sorted=False)
             selected = label.view(-1).gather(0, most_likely.indices)
             selected[selected < 0] = 0
@@ -185,7 +185,7 @@ def contact_classification_forward_step(batch, model, input_tensor):
     except BaseException:
         batch_ = batch
     tokens, labels, attention_mask = process_batch(batch_)
-    seq_len = batch_['seq_len'].long().cuda() # include [CLS] at the begining
+    seq_len = batch_['seq_len'].long().cuda() # include <cls> at the begining
     timers('batch-generator').stop()
 
     # Forward model.

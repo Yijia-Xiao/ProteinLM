@@ -42,7 +42,7 @@ you can download model checkpoint from [here](https://resource.wudaoai.cn/).
  
 
 
-The models require vocabulary files to run, we use IUPAC vocab, provided in text format [iupac_vocab.txt](./protein_tools/iupac_vocab.txt). There are 20 capital letters representing 20 kinds of amino acids, and 5 special tokens, which are commonly used in natural language processing: `[PAD], [MASK], [CLS], [SEP], [UNK]`).
+The models require vocabulary files to run, we use IUPAC vocab, provided in text format [iupac_vocab.txt](./protein_tools/iupac_vocab.txt). There are 20 capital letters representing 20 kinds of amino acids, and 5 special tokens, which are commonly used in natural language processing: `<pad>, <mask>, <cls>, [SEP], <unk>`).
 
 
 # Usage

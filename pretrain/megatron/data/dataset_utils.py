@@ -132,11 +132,11 @@ def truncate_segments(tokens_a, tokens_b, len_a, len_b, max_num_tokens, np_rng):
 
 
 def create_tokens_and_tokentypes(tokens_a, tokens_b, cls_id, sep_id):
-    """Merge segments A and B, add [CLS] and [SEP] and build tokentypes."""
+    """Merge segments A and B, add <cls> and [SEP] and build tokentypes."""
 
     tokens = []
     tokentypes = []
-    # [CLS].
+    # <cls>.
     tokens.append(cls_id)
     tokentypes.append(0)
     # Segment A.
@@ -279,7 +279,7 @@ def create_masked_lm_predictions(tokens,
             covered_indexes.add(index)
 
             masked_token = None
-            # 80% of the time, replace with [MASK]
+            # 80% of the time, replace with <mask>
             if np_rng.random() < 0.8:
                 masked_token = mask_id
             else:

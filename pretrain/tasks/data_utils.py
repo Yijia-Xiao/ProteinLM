@@ -67,7 +67,7 @@ def build_tokens_types_paddings_from_ids(text_a_ids, text_b_ids, max_seq_length,
     types = []
     paddings = []
 
-    # [CLS].
+    # <cls>.
     ids.append(cls_id)
     types.append(0)
     paddings.append(1)

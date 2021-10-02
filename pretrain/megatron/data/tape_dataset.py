@@ -239,7 +239,7 @@ def build_training_sample(sample,
         msa_length = min(raw_length + 1, max_length)
         msa_aligns = min(raw_aligns, max_aligns, max_token_num // msa_length)
 
-    # -1: spare space for [CLS]
+    # -1: spare space for <cls>
     msa_sample = raw_msa_sample[: msa_aligns, : msa_length - 1]
 
     # Build tokens and toketypes.
@@ -273,7 +273,7 @@ def build_training_sample(sample,
         'truncated': int(truncated)}
     return train_sample
 
-    # id_to_tok = {0: '[PAD]', 1: '[MASK]', 2: '[CLS]', 3: '[SEP]', 4: '[UNK]', 5: 'A', 6: 'B', 7: 'C', 8: 'D', 9: 'E', 10: 'F', 11: 'G', 12: 'H', 13: 'I', 14: 'K', 15: 'L', 16: 'M', 17: 'N', 18: 'O', 19: 'P', 20: 'Q', 21: 'R', 22: 'S', 23: 'T', 24: 'U', 25: 'V', 26: 'W', 27: 'X', 28: 'Y', 29: 'Z', 30: '-', 31: '|'}
+    # id_to_tok = {0: '<pad>', 1: '<mask>', 2: '<cls>', 3: '[SEP]', 4: '<unk>', 5: 'A', 6: 'B', 7: 'C', 8: 'D', 9: 'E', 10: 'F', 11: 'G', 12: 'H', 13: 'I', 14: 'K', 15: 'L', 16: 'M', 17: 'N', 18: 'O', 19: 'P', 20: 'Q', 21: 'R', 22: 'S', 23: 'T', 24: 'U', 25: 'V', 26: 'W', 27: 'X', 28: 'Y', 29: 'Z', 30: '-', 31: '|'}
     # seq = ''.join([id_to_tok[idx] for idx in raw_msa_sample[0]])
     # return train_sample, seq
 
@@ -450,7 +450,7 @@ def _build_sample_idx(sizes, doc_idx, seq_length,
             # Get the document length.
             doc_id = doc_idx[doc_idx_index]
             doc_length = sizes[doc_id]
-            # And add it to the current sequence, +1 means the [CLS] token
+            # And add it to the current sequence, +1 means the <cls> token
             remaining_seq_length -= doc_length + 1
             # If we have more than a full sequence, we always set
             # remaining length to zero so we return from the while loop.

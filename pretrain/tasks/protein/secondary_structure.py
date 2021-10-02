@@ -39,7 +39,7 @@ class SecondaryStructureDataset(ProteinPredictionAbstractDataset):
         item = self.samples[index]
         ids, paddings, seq_len = build_tokens_paddings_from_text(
             item['primary'], self.tokenizer, self.max_seq_length)
-        seq_len = min(seq_len + 1, self.max_seq_length) # +1 because of the [cls] token
+        seq_len = min(seq_len + 1, self.max_seq_length) # +1 because of the <cls> token
         args = get_args()
         if args.task == 'secondary_structure':
             sample = self.build_samples(ids, paddings, item['ss3'].tolist(), item['uid'], seq_len)

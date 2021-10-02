@@ -1,8 +1,8 @@
-[PAD]
-[MASK]
-[CLS]
+<pad>
+<mask>
+<cls>
 [SEP]
-[UNK]
+<unk>
 [unused1]
 A
 B

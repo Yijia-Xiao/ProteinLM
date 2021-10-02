@@ -23,7 +23,7 @@ def build_tokens_paddings_from_ids(text_ids, max_seq_length, cls_id, pad_id):
     ids = []
     paddings = []
 
-    # [CLS].
+    # <cls>.
     ids.append(cls_id)
     paddings.append(1)
 
@@ -62,7 +62,7 @@ def process_samples_from_single_lmdb_path(datapath, base=0, max_seq_length=512):
             item['seq_len'] = len(item['primary'])
             item['primary'] = " ".join(item['primary'])
             if item['seq_len'] <= max_seq_length-1:
-                # -1 for [CLS] token 
+                # -1 for <cls> token 
                 cache.append(item)
             else:
                 skipped += 1

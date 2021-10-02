@@ -134,10 +134,10 @@ class _BertWordPieceTokenizer(AbstractTokenizer):
             name = 'BERT Upper Case'
         super().__init__(name)
         self.tokenizer = FullBertTokenizer(vocab_file, do_lower_case=lower_case)
-        self.cls_id = self.tokenizer.vocab['[CLS]']
+        self.cls_id = self.tokenizer.vocab['<cls>']
         self.sep_id = self.tokenizer.vocab['[SEP]']
-        self.pad_id = self.tokenizer.vocab['[PAD]']
-        self.mask_id = self.tokenizer.vocab['[MASK]']
+        self.pad_id = self.tokenizer.vocab['<pad>']
+        self.mask_id = self.tokenizer.vocab['<mask>']
         self.msa_sep_id = self.tokenizer.vocab['|']
 
     @property
@@ -158,7 +158,7 @@ class _BertWordPieceTokenizer(AbstractTokenizer):
 
     def decode_token_ids(self, token_ids):
         tokens = self.tokenizer.convert_ids_to_tokens(token_ids)
-        exclude_list = ['[PAD]', '[CLS]']
+        exclude_list = ['<pad>', '<cls>']
         non_pads = [t for t in tokens if t not in exclude_list]
 
         result = ""
