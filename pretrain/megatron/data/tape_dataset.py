@@ -156,7 +156,7 @@ class TAPEDataset(torch.utils.data.Dataset):
         self.sep_id = tokenizer.sep
         self.mask_id = tokenizer.mask
         self.pad_id = tokenizer.pad
-        self.msa_sep_id = tokenizer.msa_sep
+        # self.msa_sep_id = tokenizer.msa_sep
 
     def __len__(self):
         # -1 is due to data structure used to retieve the index:
@@ -183,13 +183,12 @@ class TAPEDataset(torch.utils.data.Dataset):
                                      self.vocab_id_to_token_dict,
                                      self.cls_id, self.sep_id,
                                      self.mask_id, self.pad_id,
-                                     self.msa_sep_id,
                                      self.masked_lm_prob, np_rng)
 
 def build_training_sample(sample,
                           max_seq_length,
                           vocab_id_list, vocab_id_to_token_dict,
-                          cls_id, sep_id, mask_id, pad_id, msa_sep_id,
+                          cls_id, sep_id, mask_id, pad_id,
                           masked_lm_prob, np_rng):
     """Biuld training sample.
 
@@ -219,9 +218,18 @@ def build_training_sample(sample,
     max_token_num = args.max_tokens
     max_aligns = args.max_aligns
     max_length = args.max_length
+    is_fake = args.fake_input
+    if is_fake:
+        sample = np.load('/root/workspace/esm.npy')
+        raw_length = sample.shape[1]
+        sample = sample.reshape(-1)
+        # print(sample)
+    else:
+        # msa_sep_id = 31
+        msa_sep_id = 34
+        raw_length = sample.tolist().index(msa_sep_id)
+        sample = np.delete(sample, [raw_length], axis=0)
 
-    raw_length = sample.tolist().index(msa_sep_id)
-    sample = np.delete(sample, [raw_length], axis=0)
     assert len(sample) % raw_length == 0, \
         'MSA_TOTAL_LENGTH = MSA_ALIGNS * MSA_LENGTH'
     raw_aligns = len(sample) // raw_length
@@ -230,22 +238,29 @@ def build_training_sample(sample,
         else False
 
     raw_msa_sample = sample.reshape(raw_aligns, raw_length)
+    # print(sample.reshape(raw_aligns, raw_length))
 
-    align_priority = False
-    if align_priority:
-        msa_aligns = min(raw_aligns, max_aligns)
-        msa_length = min(raw_length, max_length, max_token_num // msa_aligns)
+    if not is_fake:
+        align_priority = False
+        if align_priority:
+            msa_aligns = min(raw_aligns, max_aligns)
+            msa_length = min(raw_length, max_length, max_token_num // msa_aligns)
+        else:
+            msa_length = min(raw_length + 1, max_length)
+            msa_aligns = min(raw_aligns, max_aligns, max_token_num // msa_length)
+
+        # -1: spare space for <cls>
+        msa_sample = raw_msa_sample[: msa_aligns, : msa_length - 1]
     else:
-        msa_length = min(raw_length + 1, max_length)
-        msa_aligns = min(raw_aligns, max_aligns, max_token_num // msa_length)
-
-    # -1: spare space for <cls>
-    msa_sample = raw_msa_sample[: msa_aligns, : msa_length - 1]
+        msa_sample = raw_msa_sample
+        msa_aligns = len(msa_sample)
+        msa_length = len(msa_sample[0])
 
     # Build tokens and toketypes.
     tokens = []
     for s in msa_sample:
-        tokens.append(cls_id)
+        if not is_fake:
+            tokens.append(cls_id)
         tokens += s.tolist()
 
     target_seq_length = msa_aligns * msa_length
@@ -263,6 +278,7 @@ def build_training_sample(sample,
                                    masked_labels, pad_id, target_seq_length)
 
     msa_shape = (msa_aligns, msa_length)
+    # print(msa_shape, tokens_np, tokens_np.shape)
     train_sample = {
         'text': tokens_np.reshape(msa_shape),
         # 'types': tokentypes_np,
@@ -271,11 +287,17 @@ def build_training_sample(sample,
         'loss_mask': loss_mask_np.reshape(msa_shape),
         'padding_mask': padding_mask_np.reshape(msa_shape),
         'truncated': int(truncated)}
-    return train_sample
-
-    # id_to_tok = {0: '<pad>', 1: '<mask>', 2: '<cls>', 3: '[SEP]', 4: '<unk>', 5: 'A', 6: 'B', 7: 'C', 8: 'D', 9: 'E', 10: 'F', 11: 'G', 12: 'H', 13: 'I', 14: 'K', 15: 'L', 16: 'M', 17: 'N', 18: 'O', 19: 'P', 20: 'Q', 21: 'R', 22: 'S', 23: 'T', 24: 'U', 25: 'V', 26: 'W', 27: 'X', 28: 'Y', 29: 'Z', 30: '-', 31: '|'}
-    # seq = ''.join([id_to_tok[idx] for idx in raw_msa_sample[0]])
-    # return train_sample, seq
+    # id_to_tok = {0: '<pad>', 1: '<mask>', 2: '<cls>', 3: '<sep>', 4: '<unk>', 5: 'A', 6: 'B', 7: 'C', 8: 'D', 9: 'E', 10: 'F', 11: 'G', 12: 'H', 13: 'I', 14: 'K', 15: 'L', 16: 'M', 17: 'N', 18: 'O', 19: 'P', 20: 'Q', 21: 'R', 22: 'S', 23: 'T', 24: 'U', 25: 'V', 26: 'W', 27: 'X', 28: 'Y', 29: 'Z', 30: '-', 31: '|'}
+    # id_to_tok = dict()
+    # with open('/root/release/ProteinLM/pretrain/msa_tools/msa_vocab.txt', 'r') as f:
+    #     for idx, l in enumerate(f.readlines()):
+    #         id_to_tok[idx] = l.strip()
+    #         # id_to_tok = {0: '<pad>', 1: '<mask>', 2: '<cls>', 3: '<sep>', 4: '<unk>', 5: 'A', 6: 'B', 7: 'C', 8: 'D', 9: 'E', 10: 'F', 11: 'G', 12: 'H', 13: 'I', 14: 'K', 15: 'L', 16: 'M', 17: 'N', 18: 'O', 19: 'P', 20: 'Q', 21: 'R', 22: 'S', 23: 'T', 24: 'U', 25: 'V', 26: 'W', 27: 'X', 28: 'Y', 29: 'Z', 30: '-', 31: '|'}
+    #     print(id_to_tok)
+    id_to_tok = {0: '<cls>', 1: '<pad>', 2: '<eos>', 3: '<unk>', 4: 'L', 5: 'A', 6: 'G', 7: 'V', 8: 'S', 9: 'E', 10: 'R', 11: 'T', 12: 'I', 13: 'D', 14: 'P', 15: 'K', 16: 'Q', 17: 'N', 18: 'F', 19: 'Y', 20: 'M', 21: 'H', 22: 'W', 23: 'C', 24: 'X', 25: 'B', 26: 'U', 27: 'Z', 28: 'O', 29: '.', 30: '-', 31: '<null_1>', 32: '<mask>', 33: '<sep>', 34: '|'}
+    seq = [''.join([id_to_tok[idx] for idx in alig]) for alig in raw_msa_sample]
+    return train_sample, seq
+    # return train_sample
 
 def _num_tokens(documents, sizes, max_seq_length):
     """Total number of tokens in the dataset."""

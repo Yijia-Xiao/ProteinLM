@@ -57,6 +57,7 @@ torch._C._jit_override_can_fuse_on_gpu(True)
                                      unmaksed-attention-scores, attention-mask)
 """
 
+DEBUG = False
 class Collector(object):
     __collect = list()
 
@@ -72,7 +73,7 @@ class Collector(object):
     def dump(cls, path):
         rank = mpu.get_data_parallel_rank()
         file_path = os.path.join(
-            path, str(rank) + '_' + get_args().attention_name + '.pt')
+            path, get_args().attention_name + '.pt')
         torch.save(cls.__collect, file_path)
         print_rank_0(f'file saved to {file_path}, dp = {rank}')
 
@@ -129,7 +130,8 @@ class ParallelMLP(MegatronModule):
         else:
             intermediate_parallel = \
                 self.activation_func(intermediate_parallel + bias_parallel)
-
+        if DEBUG:
+            print("in mlp" + f'{intermediate_parallel.sum().item()=}')
         # [s, b, h]
         output, output_bias = self.dense_4h_to_h(intermediate_parallel)
         return output, output_bias
@@ -234,7 +236,8 @@ class ParallelSelfAttention(MegatronModule):
     def forward(self, hidden_states, attention_mask, layer_past=None,
                 get_key_value=False):
         # hidden_states: [sq, b, h]
-
+        if DEBUG:
+            print('attention in.sum()', hidden_states.sum())
         # =====================
         # Query, Key, and Value
         # =====================
@@ -261,6 +264,11 @@ class ParallelSelfAttention(MegatronModule):
         (query_layer,
          key_layer,
          value_layer) = mpu.split_tensor_along_last_dim(mixed_x_layer, 3)
+        # print(f"{mixed_x_layer.sum().item()=}")
+
+        # print(f"{query_layer.sum().item()=}")
+        # print(f"{key_layer.sum().item()=}")
+        # print(f"{value_layer.sum().item()=}")
 
         # ==================================
         # Adjust key and value for inference
@@ -275,6 +283,12 @@ class ParallelSelfAttention(MegatronModule):
         if get_key_value:
             present = (key_layer, value_layer)
 
+        if DEBUG:
+            print(self.attention_type, f"{query_layer.sum().item()=}")
+            print(self.attention_type, f"{key_layer.sum().item()=}")
+            print(self.attention_type, f"{value_layer.sum().item()=}")
+            # print(self.attention_type, f"{key_layer.transpose(0, 1)[2:7].sum().item()=}, {key_layer.shape=}")
+            # print(self.attention_type, f"{query_layer[34, 5, 4, 18]=}")
 
         # ===================================
         # Raw attention scores. [b, np, s, s]
@@ -301,17 +315,29 @@ class ParallelSelfAttention(MegatronModule):
             device=torch.cuda.current_device())
 
         # Raw attention scores. [b * np, sq, sk]
+        # print(1.0/self.norm_factor)
+
+        new_norm_factor = 1.0 / self.norm_factor
+        if self.attention_type == 'row':
+            new_norm_factor /=  math.sqrt(hidden_states.size(1))
+        # print(new_norm_factor)
+
         matmul_result = torch.baddbmm(matmul_result, 
             query_layer.transpose(0, 1),   # [b * np, sq, hn]
             key_layer.transpose(0,1).transpose(1, 2),  #[b * np, hn, sk]
-            beta=0.0, alpha=(1.0/self.norm_factor))
+            beta=0.0, alpha=new_norm_factor) #alpha=(1.0/self.norm_factor))
 
         # change view to [b, np, sq, sk]
         attention_scores = matmul_result.view(*output_size)
+        M = attention_scores.size(0)
         if self.attention_type == 'row':
-            M = attention_scores.size(0)
+            # print('attention_scores.sum()', attention_scores.sum())
+            # attention_scores = torch.sum(attention_scores, dim=0, keepdim=True) # .repeat(M, 1, 1, 1)
             attention_scores = torch.sum(attention_scores, dim=0).repeat(M, 1, 1, 1)
-            attention_scores /= math.sqrt(M)
+
+            # attention_scores /= math.sqrt(M)
+            # print('row attention_scores.sum()', attention_scores.sum())
+
             if get_args().attention_save:
                 Collector.append(attention_scores[0].cpu().detach())
 
@@ -347,6 +373,11 @@ class ParallelSelfAttention(MegatronModule):
         with mpu.get_cuda_rng_tracker().fork():
             attention_probs = self.attention_dropout(attention_probs)
 
+        if DEBUG:
+            if self.attention_type == 'row':
+                print(f"row {(attention_probs**2).sum()/M=}")
+            else:
+                print(f"col {(attention_probs**2).sum().item()=}")
 
         # =========================
         # Context layer. [sq, b, hp]
@@ -371,6 +402,8 @@ class ParallelSelfAttention(MegatronModule):
         
         # matmul: [b * np, sq, hn]
         context_layer = torch.bmm(attention_probs, value_layer.transpose(0,1))
+        if DEBUG:
+            print(f'{context_layer.sum().item()=}')
 
         # change view [b, np, sq, hn]
         context_layer = context_layer.view(*output_size)
@@ -389,6 +422,11 @@ class ParallelSelfAttention(MegatronModule):
         # =================
 
         output, bias = self.dense(context_layer)
+
+        if DEBUG:
+            print(self.attention_type, f'{(output + bias).sum().item()=}')
+
+        # (output + bias).sum().item()=tensor(-21397.6582, device='cuda:0', grad_fn=<SumBackward0>)
 
         if get_key_value:
             output = [output, present]
@@ -473,7 +511,13 @@ class ParallelTransformerLayer(MegatronModule):
 
         ## start row attention
         # Layer norm at the begining of the transformer layer.
+        if DEBUG:
+            print(f"{hidden_states.sum().item()=}")
         layernorm_output = self.row_input_layernorm(hidden_states)
+        if DEBUG:
+            print(f"{self.row_input_layernorm.weight.sum().item()=}, {self.row_input_layernorm.bias.sum().item()=}")
+            print(f"{layernorm_output.sum().item()=}")
+
         # Self attention.
         attention_output, attention_bias = \
             self.row_attention(layernorm_output,
@@ -560,12 +604,21 @@ class ParallelTransformerLayer(MegatronModule):
         
         ## transpose col attention output
         layernorm_input = layernorm_input.transpose(0, 1)
-
+        if DEBUG:
+            print("before mlp, beforen ln" + f'{layernorm_input.sum().item()=}')
+            print("ln weight" + f"{self.post_attention_layernorm.weight.sum()}")
+            print("ln bias" + f"{self.post_attention_layernorm.bias.sum()}")
+        
         # Layer norm post the self attention.
         layernorm_output = self.post_attention_layernorm(layernorm_input)
 
+        if DEBUG:
+            print("before mlp, after ln " + f'{layernorm_output.sum().item()=}')
         # MLP.
         mlp_output, mlp_bias = self.mlp(layernorm_output)
+        if DEBUG:
+            print("mlp res" + f"{(mlp_output + mlp_bias).sum().item()=}")
+        # exit(0)
         
         # Second residual connection.
         if self.apply_residual_connection_post_layernorm:
@@ -684,10 +737,15 @@ class ParallelTransformer(MegatronModule):
                                       attention_mask,
                                       layer_past=past,
                                       get_key_value=get_key_value)
+                # if DEBUG:
+                print('$$' * 10, f"{index=}", f"{hidden_states.sum().item()=}")
+                # if index == 3:
+                #     exit(0)
                 if get_key_value:
                     hidden_states, present = hidden_states
                     presents.append(present)
-        
+        # exit(0)
+        print('transformer done')
         # Final layer norm.
         if mpu.is_pipeline_last_stage():
             # Reverting data format change [s b h] --> [b s h].

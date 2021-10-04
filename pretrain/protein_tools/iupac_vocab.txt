@@ -1,7 +1,7 @@
 <pad>
 <mask>
 <cls>
-[SEP]
+<sep>
 <unk>
 [unused1]
 A

@@ -132,7 +132,7 @@ def truncate_segments(tokens_a, tokens_b, len_a, len_b, max_num_tokens, np_rng):
 
 
 def create_tokens_and_tokentypes(tokens_a, tokens_b, cls_id, sep_id):
-    """Merge segments A and B, add <cls> and [SEP] and build tokentypes."""
+    """Merge segments A and B, add <cls> and <sep> and build tokentypes."""
 
     tokens = []
     tokentypes = []

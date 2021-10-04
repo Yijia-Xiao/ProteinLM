@@ -629,5 +629,11 @@ def _add_msa_args(parser):
                        help="Attention weights save frequency.")
     group.add_argument('--attention-name', type=str, default=None,
                        help='Attention output file suffix.')
+    group.add_argument('--fake-input', action='store_true',
+                       help='Fake input.')
+    group.add_argument('--add-msa-positional-embedding', action='store_true',
+                       help='MSA positional embedding.')
+    group.add_argument('--add-post-embedding-layernorm', action='store_true',
+                       help='Add layernorm after word-wmbedding.')
 
     return parser

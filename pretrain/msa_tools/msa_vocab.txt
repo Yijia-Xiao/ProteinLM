@@ -31,3 +31,5 @@ O
 -
 <null_1>
 <mask>
+<sep>
+|

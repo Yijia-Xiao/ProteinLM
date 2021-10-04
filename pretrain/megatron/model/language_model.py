@@ -15,6 +15,7 @@
 
 """Transformer based language model."""
 
+from tokenize import Token
 import torch
 import torch.nn.functional as F
 
@@ -131,6 +132,8 @@ class Embedding(MegatronModule):
         self.num_tokentypes = num_tokentypes
 
         args = get_args()
+        self.add_msa_positional_embedding = args.add_msa_positional_embedding
+        self.add_post_embedding_layernorm = args.add_post_embedding_layernorm
 
         # Word embeddings (parallel).
         self.word_embeddings = mpu.VocabParallelEmbedding(
@@ -146,12 +149,16 @@ class Embedding(MegatronModule):
         self.init_method(self.position_embeddings.weight)
 
         # MSA positional embedding
-        self.msa_max_aligns = get_args().max_aligns
-        self.msa_positional_embedding = torch.nn.Embedding(self.msa_max_aligns,
-                                                        self.hidden_size)
-        # Initialize the msa positoinal embeddings.
-        self.init_method(self.msa_positional_embedding.weight)
-        self._msa_positional_embedding_key = 'msa_positional_embeddings'
+        # self.msa_max_aligns = get_args().max_aligns
+
+        # TODO: MSA indent
+        if self.add_msa_positional_embedding:
+            self.msa_max_aligns = 1024
+            self.msa_positional_embedding = torch.nn.Embedding(self.msa_max_aligns,
+                                                            self.hidden_size)
+            self._msa_positional_embedding_key = 'msa_positional_embeddings'
+            # Initialize the msa positoinal embeddings.
+            self.init_method(self.msa_positional_embedding.weight)
 
         # Token type embedding.
         # Add this as an optional field that can be added through
@@ -165,6 +172,15 @@ class Embedding(MegatronModule):
             self.init_method(self.tokentype_embeddings.weight)
         else:
             self.tokentype_embeddings = None
+
+        # TODO: add layernorm
+        if self.add_post_embedding_layernorm:
+            from megatron.model import import_layernorm
+            LayerNorm = import_layernorm(args.fp32_residual_connection)
+            self.emb_layer_norm_before = LayerNorm(
+                    args.hidden_size,
+                    eps=args.layernorm_epsilon)
+            self._emb_layer_norm_before_key = 'emb_layer_norm_before'
 
         # Embeddings dropout
         self.embedding_dropout = torch.nn.Dropout(embedding_dropout_prob)
@@ -190,20 +206,30 @@ class Embedding(MegatronModule):
         # Embeddings.
         words_embeddings = self.word_embeddings(input_ids)
         position_embeddings = self.position_embeddings(position_ids)
-        msa_position_ids = torch.arange(self.msa_max_aligns, device=position_embeddings.device)\
-            .reshape(-1, 1)\
-            .repeat(1, position_ids.size(1))
-        msa_positional_embeddings = self.msa_positional_embedding(msa_position_ids)
+        if self.add_msa_positional_embedding:
+            msa_position_ids = torch.arange(input_ids.size(0), device=position_embeddings.device)\
+                .reshape(-1, 1)\
+                .repeat(1, position_ids.size(1))
+            msa_positional_embeddings = self.msa_positional_embedding(msa_position_ids)
 
-        embeddings = words_embeddings + position_embeddings + msa_positional_embeddings
+            embeddings = words_embeddings + position_embeddings + msa_positional_embeddings
+        else:
+            embeddings = words_embeddings + position_embeddings
+
         if tokentype_ids is not None:
             assert self.tokentype_embeddings is not None
             embeddings = embeddings + self.tokentype_embeddings(tokentype_ids)
         else:
             assert self.tokentype_embeddings is None
 
+        # print('x.sum() 0 norm, 0 drop', embeddings.sum())
+        # TODO: add a layer norm
+        if self.add_post_embedding_layernorm:
+            embeddings = self.emb_layer_norm_before(embeddings)
+        # print('x.sum() 1 norm, 0 drop', embeddings.sum())
         # Dropout.
         embeddings = self.embedding_dropout(embeddings)
+        # print('x.sum() 1 norm, 1 drop', embeddings.sum())
 
         return embeddings
 
@@ -217,6 +243,14 @@ class Embedding(MegatronModule):
         state_dict_[self._position_embeddings_key] \
             = self.position_embeddings.state_dict(
                 destination, prefix, keep_vars)
+        if self.add_msa_positional_embedding:
+            state_dict_[self._msa_positional_embedding_key] \
+                = self.msa_positional_embedding.state_dict(
+                    destination, prefix, keep_vars)
+        if self.add_post_embedding_layernorm:
+            state_dict_[self._emb_layer_norm_before_key] \
+                = self.emb_layer_norm_before.state_dict(
+                    destination, prefix, keep_vars)
         if self.num_tokentypes > 0:
             state_dict_[self._tokentype_embeddings_key] \
                 = self.tokentype_embeddings.state_dict(
@@ -251,7 +285,7 @@ class Embedding(MegatronModule):
                         = state_dict[key]
         self.position_embeddings.load_state_dict(state_dict_, strict=strict)
 
-        if self.msa_positional_embedding:
+        if self.add_msa_positional_embedding:
             if self._msa_positional_embedding_key in state_dict:
                 state_dict_ = state_dict[self._msa_positional_embedding_key]
             else:
@@ -259,9 +293,21 @@ class Embedding(MegatronModule):
                 state_dict_ = {}
                 for key in state_dict.keys():
                     if 'msa_positional_embeddings' in key:
-                        state_dict_[key.split('position_embeddings.')[1]] \
+                        state_dict_[key.split('msa_positional_embeddings.')[1]] \
                             = state_dict[key]
-            self.position_embeddings.load_state_dict(state_dict_, strict=strict)
+            self.msa_positional_embedding.load_state_dict(state_dict_, strict=strict)
+
+        if self.add_post_embedding_layernorm:
+            if self._emb_layer_norm_before_key in state_dict:
+                state_dict_ = state_dict[self._emb_layer_norm_before_key]
+            else:
+                # for backward compatibility.
+                state_dict_ = {}
+                for key in state_dict.keys():
+                    if 'emb_layer_norm_before_key' in key:
+                        state_dict_[key.split('emb_layer_norm_before_key.')[1]] \
+                            = state_dict[key]
+            self.emb_layer_norm_before.load_state_dict(state_dict_, strict=strict)
 
         # Tokentype embedding.
         if self.num_tokentypes > 0:
@@ -345,6 +391,7 @@ class TransformerLanguageModelBase(MegatronModule):
             (input_ids, position_ids) = language_model_input
             embedding_output = self.embedding(input_ids, position_ids,
                                               tokentype_ids=tokentype_ids)
+            # print('before transformer.sum()', embedding_output.sum())
             transformer_input = embedding_output
         else:
             transformer_input = language_model_input
@@ -355,6 +402,7 @@ class TransformerLanguageModelBase(MegatronModule):
                                               layer_past=layer_past,
                                               get_key_value=get_key_value)
 
+        # print('transformer_output sum()', transformer_output.sum())
         if mpu.is_pipeline_last_stage() and self.add_pooler:
             pooled_output = self.pooler(transformer_output,
                                         pooling_sequence_index)
