@@ -687,6 +687,7 @@ class ParallelTransformer(MegatronModule):
                                       attention_mask,
                                       layer_past=past,
                                       get_key_value=get_key_value)
+                # print(f'{hidden_states.sum()=}')
                 if get_key_value:
                     hidden_states, present = hidden_states
                     presents.append(present)

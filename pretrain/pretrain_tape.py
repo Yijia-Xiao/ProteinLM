@@ -76,7 +76,7 @@ def get_batch(data_iterator):
     else:
         data = None
     # TODO: support protein string return
-    # data, seq = data
+    data, seq = data
     data_b = mpu.broadcast_data(keys, data, datatype)
 
 
@@ -95,7 +95,7 @@ def get_batch(data_iterator):
     # TODO: position_ids + 2
     if get_args().fake_input:
         position_ids += 2
-    return tokens, loss_mask, lm_labels, padding_mask, attention_mask, position_ids # , seq
+    return tokens, loss_mask, lm_labels, padding_mask, attention_mask, position_ids, seq
 
 
 def forward_step(data_iterator, model, input_tensor):
@@ -106,9 +106,9 @@ def forward_step(data_iterator, model, input_tensor):
     # Get the batch.
     timers('batch-generator').start()
     # TODO: support protein string return
-    # tokens, loss_mask, lm_labels, padding_mask, attention_mask, position_ids, seq \
-    tokens, loss_mask, lm_labels, padding_mask, attention_mask, position_ids \
+    tokens, loss_mask, lm_labels, padding_mask, attention_mask, position_ids, seq \
         = get_batch(data_iterator)
+    # tokens, loss_mask, lm_labels, padding_mask, attention_mask, position_ids \
     timers('batch-generator').stop()
 
     extended_attention_mask = bert_extended_attention_mask(padding_mask) + attention_mask
@@ -122,7 +122,7 @@ def forward_step(data_iterator, model, input_tensor):
                     print('skipping one sample')
                     return 0, {'lm loss': 0}
                 # NOTICE: remember to change return function of `get_batch` function
-                # Collector.append(seq)
+                Collector.append(seq)
             output_tensor = model(tokens, extended_attention_mask, tokentype_ids=None,
                                   lm_labels=lm_labels, position_ids=position_ids)
         else:
