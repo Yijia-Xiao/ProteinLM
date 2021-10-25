@@ -187,13 +187,163 @@ class TAPEDataset(torch.utils.data.Dataset):
                                      self.msa_sep_id,
                                      self.masked_lm_prob, np_rng)
 
+# def build_training_sample(sample,
+#                           max_seq_length,
+#                           vocab_id_list, vocab_id_to_token_dict,
+#                           cls_id, sep_id, mask_id, pad_id, msa_sep_id,
+#                           masked_lm_prob, np_rng):
+#     """Biuld training sample.
+
+#     Arguments:
+#         sample: A list of sentences in which each sentence is a list token ids.
+#         max_seq_length: Maximum length of the sequence. All values are padded to
+#             this length.
+#         vocab_id_list: List of vocabulary ids. Used to pick a random id.
+#         vocab_id_to_token_dict: A dictionary from vocab ids to text tokens.
+#         cls_id: Start of example id.
+#         sep_id: Separator id.
+#         mask_id: Mask token id.
+#         pad_id: Padding token id.
+#         msa_sep_id: MSA split token id.
+#         masked_lm_prob: Probability to mask tokens.
+#         np_rng: Random number genenrator. Note that this rng state should be
+#               numpy and not python since python randint is inclusive for
+#               the opper bound whereas the numpy one is exclusive.
+#     """
+
+#     # We assume that we have at least one sentence in the sample
+#     assert len(sample) == 1, 'only support one MSA per batch'
+
+#     truncated = False
+#     sample = sample[0]
+#     args = get_args()
+#     max_token_num = args.max_tokens
+#     max_aligns = args.max_aligns
+#     max_length = args.max_length
+#     is_fake = args.fake_input
+#     if is_fake:
+#         sample = np.load('/root/workspace/esm.npy')
+#         raw_length = sample.shape[1]
+#         sample = sample.reshape(-1)
+#     else:
+#         raw_length = sample.tolist().index(msa_sep_id)
+#         sample = np.delete(sample, [raw_length], axis=0)
+
+#     assert len(sample) % raw_length == 0, \
+#         'MSA_TOTAL_LENGTH = MSA_ALIGNS * MSA_LENGTH'
+#     raw_aligns = len(sample) // raw_length
+
+#     truncated = True if (len(sample) > max_token_num) \
+#         else False
+
+#     raw_msa_sample = sample.reshape(raw_aligns, raw_length)
+
+#     # if not is_fake:
+#     #     # align_priority = False
+#     #     # if align_priority:
+#     #     #     msa_aligns = min(raw_aligns, max_aligns)
+#     #     #     msa_length = min(raw_length, max_length, max_token_num // msa_aligns)
+#     #     # else:
+#     #     #     msa_length = min(raw_length + 1, max_length)
+#     #     #     msa_aligns = min(raw_aligns, max_aligns, max_token_num // msa_length)
+
+#     #     if raw_length <= max_length - 1:
+#     #         offset = 0
+#     #         msa_length = raw_length + 1
+#     #     else: # raw_length >= max_length
+#     #         # [, ); low < high
+#     #         offset = random.randint(0, (raw_length - max_length + 1))
+#     #         msa_length = max_length
+#     #     msa_aligns = min(raw_aligns, max_aligns, max_token_num // msa_length)
+#     #     msa_sample = raw_msa_sample[: msa_aligns, offset: offset + msa_length - 1]
+#     # else:
+#     #     offset = 2
+#     #     msa_sample = raw_msa_sample
+#     #     msa_aligns = len(msa_sample)
+#     #     msa_length = len(msa_sample[0])
+
+#     # # if raw_length <= max_length - 1:
+#     # len_truncate = raw_length < max_length
+#     # # start_idx = 0 if len_truncate else random.randint(0, (raw_length - max_length + 2))
+#     # # TODO: donnot be greedy, last one should be discarded, leave space for [CLS]
+#     # offset = 0 if len_truncate else random.randint(0, (raw_length - max_length + 1))
+#     # # print(f'{raw_length=}, {max_length=}')
+#     # msa_length = (raw_length + 1) if len_truncate else max_length
+#     # msa_aligns = min(raw_aligns, max_aligns, max_token_num // msa_length)
+#     # # assert offset + msa_length - 1 <= raw_length, 'over bound'
+#     # msa_sample = raw_msa_sample[: msa_aligns, offset: offset + msa_length - 1]
+
+#     msa_length = min(raw_length + 1, max_length)
+#     msa_aligns = min(raw_aligns, max_aligns, max_token_num // msa_length)
+#     msa_sample = raw_msa_sample[: msa_aligns, : msa_length - 1]
+#     offset = 0
+#     # # raw 1023, max 768, msa_length 1024
+#     # msa_length = min(raw_length + 1, max_length)
+#     # msa_aligns = min(raw_aligns, max_aligns, max_token_num // msa_length)
+#     # # max_offset = 256    # (1024 - 768)
+#     # # print(f'{msa_length=}')
+#     # # offset = random.randint(0, 256)
+#     # offset = random.randint(0, raw_length - msa_length)
+#     # # print(offset)
+#     # # -1: spare space for [CLS]
+#     # # msa_sample = raw_msa_sample[: msa_aligns, : msa_length - 1]
+#     # # msa_sample = raw_msa_sample[offset: offset + msa_aligns, : msa_length - 1]
+#     # msa_sample = raw_msa_sample[: msa_aligns, offset: (offset + msa_length - 1)]
+#     # print(type(raw_msa_sample))
+#     # print(f'{raw_msa_sample.shape=}, {offset=}, {(offset + msa_length - 1)=}, {msa_sample.shape=}, {msa_aligns=}, {msa_length=}')
+
+#     # TODO: shuffle MSA
+#     if args.msa_shuffle:
+#         # print('shuffle...')
+#         np.random.shuffle(msa_sample[1: ])
+
+#     # Build tokens and toketypes.
+#     tokens = []
+#     for s in msa_sample:
+#         # if not is_fake:
+#         #     tokens.append(cls_id)
+#         tokens.append(cls_id)
+#         tokens += s.tolist()
+#     # offset -= 1
+
+#     target_seq_length = msa_aligns * msa_length
+#     # print(f'{target_seq_length=}, {msa_aligns=}, {msa_length=}, {len(tokens)=}')
+#     tokentypes = [0] * target_seq_length
+
+#     # Masking.
+#     max_predictions_per_seq = masked_lm_prob * target_seq_length
+#     (tokens, masked_positions, masked_labels, _) = create_masked_lm_predictions(
+#         tokens, vocab_id_list, vocab_id_to_token_dict, masked_lm_prob,
+#         cls_id, sep_id, mask_id, max_predictions_per_seq, np_rng, max_ngrams=1, do_whole_word_mask=False)
+
+#     # Padding.
+#     tokens_np, tokentypes_np, labels_np, padding_mask_np, loss_mask_np \
+#         = pad_and_convert_to_numpy(tokens, tokentypes, masked_positions,
+#                                    masked_labels, pad_id, target_seq_length)
+
+#     msa_shape = (msa_aligns, msa_length)
+#     train_sample = {
+#         'text': tokens_np.reshape(msa_shape),
+#         # 'types': tokentypes_np,
+#         'labels': labels_np.reshape(msa_shape),
+#         # 'is_random': int(is_next_random),
+#         'loss_mask': loss_mask_np.reshape(msa_shape),
+#         # 'padding_mask': padding_mask_np.reshape(msa_shape),
+#         'truncated': int(truncated),
+#         'offset': offset}
+
+#     msa_vocab = {0: '[PAD]', 1: '[MASK]', 2: '[CLS]', 3: '[SEP]', 4: '[UNK]', 5: 'A', 6: 'B', 7: 'C', 8: 'D', 9: 'E', 10: 'F', 11: 'G', 12: 'H', 13: 'I', 14: 'K', 15: 'L', 16: 'M', 17: 'N', 18: 'O', 19: 'P', 20: 'Q', 21: 'R', 22: 'S', 23: 'T', 24: 'U', 25: 'V', 26: 'W', 27: 'X', 28: 'Y', 29: 'Z', 30: '-', 31: '|'}
+#     # esm_vocab = {0: '<cls>', 1: '<pad>', 2: '<eos>', 3: '<unk>', 4: 'L', 5: 'A', 6: 'G', 7: 'V', 8: 'S', 9: 'E', 10: 'R', 11: 'T', 12: 'I', 13: 'D', 14: 'P', 15: 'K', 16: 'Q', 17: 'N', 18: 'F', 19: 'Y', 20: 'M', 21: 'H', 22: 'W', 23: 'C', 24: 'X', 25: 'B', 26: 'U', 27: 'Z', 28: 'O', 29: '.', 30: '-', 31: '<null_1>', 32: '<mask>', 33: '<sep>', 34: '|'}
+#     seq = [''.join([msa_vocab[idx] for idx in alig]) for alig in raw_msa_sample]
+#     # return train_sample, seq
+#     return train_sample, msa_shape, seq
+
 def build_training_sample(sample,
                           max_seq_length,
                           vocab_id_list, vocab_id_to_token_dict,
                           cls_id, sep_id, mask_id, pad_id, msa_sep_id,
                           masked_lm_prob, np_rng):
     """Biuld training sample.
-
     Arguments:
         sample: A list of sentences in which each sentence is a list token ids.
         max_seq_length: Maximum length of the sequence. All values are padded to
@@ -220,14 +370,9 @@ def build_training_sample(sample,
     max_token_num = args.max_tokens
     max_aligns = args.max_aligns
     max_length = args.max_length
-    is_fake = args.fake_input
-    if is_fake:
-        sample = np.load('/root/workspace/esm.npy')
-        raw_length = sample.shape[1]
-        sample = sample.reshape(-1)
-    else:
-        raw_length = sample.tolist().index(msa_sep_id)
-        sample = np.delete(sample, [raw_length], axis=0)
+
+    raw_length = sample.tolist().index(msa_sep_id)
+    sample = np.delete(sample, [raw_length], axis=0)
 
     assert len(sample) % raw_length == 0, \
         'MSA_TOTAL_LENGTH = MSA_ALIGNS * MSA_LENGTH'
@@ -238,76 +383,23 @@ def build_training_sample(sample,
 
     raw_msa_sample = sample.reshape(raw_aligns, raw_length)
 
-    # if not is_fake:
-    #     # align_priority = False
-    #     # if align_priority:
-    #     #     msa_aligns = min(raw_aligns, max_aligns)
-    #     #     msa_length = min(raw_length, max_length, max_token_num // msa_aligns)
-    #     # else:
-    #     #     msa_length = min(raw_length + 1, max_length)
-    #     #     msa_aligns = min(raw_aligns, max_aligns, max_token_num // msa_length)
-
-    #     if raw_length <= max_length - 1:
-    #         offset = 0
-    #         msa_length = raw_length + 1
-    #     else: # raw_length >= max_length
-    #         # [, ); low < high
-    #         offset = random.randint(0, (raw_length - max_length + 1))
-    #         msa_length = max_length
-    #     msa_aligns = min(raw_aligns, max_aligns, max_token_num // msa_length)
-    #     msa_sample = raw_msa_sample[: msa_aligns, offset: offset + msa_length - 1]
-    # else:
-    #     offset = 2
-    #     msa_sample = raw_msa_sample
-    #     msa_aligns = len(msa_sample)
-    #     msa_length = len(msa_sample[0])
-
-    # # if raw_length <= max_length - 1:
-    # len_truncate = raw_length < max_length
-    # # start_idx = 0 if len_truncate else random.randint(0, (raw_length - max_length + 2))
-    # # TODO: donnot be greedy, last one should be discarded, leave space for [CLS]
-    # offset = 0 if len_truncate else random.randint(0, (raw_length - max_length + 1))
-    # # print(f'{raw_length=}, {max_length=}')
-    # msa_length = (raw_length + 1) if len_truncate else max_length
-    # msa_aligns = min(raw_aligns, max_aligns, max_token_num // msa_length)
-    # # assert offset + msa_length - 1 <= raw_length, 'over bound'
-    # msa_sample = raw_msa_sample[: msa_aligns, offset: offset + msa_length - 1]
-
     msa_length = min(raw_length + 1, max_length)
     msa_aligns = min(raw_aligns, max_aligns, max_token_num // msa_length)
+ 
+    # -1: spare space for [CLS]
     msa_sample = raw_msa_sample[: msa_aligns, : msa_length - 1]
-    offset = 0
-    # # raw 1023, max 768, msa_length 1024
-    # msa_length = min(raw_length + 1, max_length)
-    # msa_aligns = min(raw_aligns, max_aligns, max_token_num // msa_length)
-    # # max_offset = 256    # (1024 - 768)
-    # # print(f'{msa_length=}')
-    # # offset = random.randint(0, 256)
-    # offset = random.randint(0, raw_length - msa_length)
-    # # print(offset)
-    # # -1: spare space for [CLS]
-    # # msa_sample = raw_msa_sample[: msa_aligns, : msa_length - 1]
-    # # msa_sample = raw_msa_sample[offset: offset + msa_aligns, : msa_length - 1]
-    # msa_sample = raw_msa_sample[: msa_aligns, offset: (offset + msa_length - 1)]
-    # print(type(raw_msa_sample))
-    # print(f'{raw_msa_sample.shape=}, {offset=}, {(offset + msa_length - 1)=}, {msa_sample.shape=}, {msa_aligns=}, {msa_length=}')
 
     # TODO: shuffle MSA
     if args.msa_shuffle:
-        # print('shuffle...')
         np.random.shuffle(msa_sample[1: ])
 
     # Build tokens and toketypes.
     tokens = []
     for s in msa_sample:
-        # if not is_fake:
-        #     tokens.append(cls_id)
         tokens.append(cls_id)
         tokens += s.tolist()
-    # offset -= 1
 
     target_seq_length = msa_aligns * msa_length
-    # print(f'{target_seq_length=}, {msa_aligns=}, {msa_length=}, {len(tokens)=}')
     tokentypes = [0] * target_seq_length
 
     # Masking.
@@ -324,19 +416,13 @@ def build_training_sample(sample,
     msa_shape = (msa_aligns, msa_length)
     train_sample = {
         'text': tokens_np.reshape(msa_shape),
-        # 'types': tokentypes_np,
         'labels': labels_np.reshape(msa_shape),
-        # 'is_random': int(is_next_random),
         'loss_mask': loss_mask_np.reshape(msa_shape),
-        # 'padding_mask': padding_mask_np.reshape(msa_shape),
-        'truncated': int(truncated),
-        'offset': offset}
+        'padding_mask': padding_mask_np.reshape(msa_shape),
+        'truncated': int(truncated)}
 
-    msa_vocab = {0: '[PAD]', 1: '[MASK]', 2: '[CLS]', 3: '[SEP]', 4: '[UNK]', 5: 'A', 6: 'B', 7: 'C', 8: 'D', 9: 'E', 10: 'F', 11: 'G', 12: 'H', 13: 'I', 14: 'K', 15: 'L', 16: 'M', 17: 'N', 18: 'O', 19: 'P', 20: 'Q', 21: 'R', 22: 'S', 23: 'T', 24: 'U', 25: 'V', 26: 'W', 27: 'X', 28: 'Y', 29: 'Z', 30: '-', 31: '|'}
-    # esm_vocab = {0: '<cls>', 1: '<pad>', 2: '<eos>', 3: '<unk>', 4: 'L', 5: 'A', 6: 'G', 7: 'V', 8: 'S', 9: 'E', 10: 'R', 11: 'T', 12: 'I', 13: 'D', 14: 'P', 15: 'K', 16: 'Q', 17: 'N', 18: 'F', 19: 'Y', 20: 'M', 21: 'H', 22: 'W', 23: 'C', 24: 'X', 25: 'B', 26: 'U', 27: 'Z', 28: 'O', 29: '.', 30: '-', 31: '<null_1>', 32: '<mask>', 33: '<sep>', 34: '|'}
-    seq = [''.join([msa_vocab[idx] for idx in alig]) for alig in raw_msa_sample]
-    # return train_sample, seq
-    return train_sample, msa_shape, seq
+    return train_sample, msa_shape
+
 
 def _num_tokens(documents, sizes, max_seq_length):
     """Total number of tokens in the dataset."""
