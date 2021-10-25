@@ -12,10 +12,13 @@ def compute_precision_at_l5(seq_lens, predictions, labels, ignore_index=-1, retu
         valid_masks = valid_masks.type_as(probs)
         correct = 0
         total = 0
+        args = get_args()
+        ratio = args.contact_prediction_ratio
         for seq_len, prob, label, mask in zip(seq_lens, probs, labels, valid_masks):
             masked_prob = (prob * mask).view(-1)
             seq_len = seq_len.item() - 1 # -1 because of the [CLS]
-            most_likely = masked_prob.topk(seq_len // 5, sorted=False)
+            most_likely = masked_prob.topk(int(seq_len * ratio), sorted=False)
+            # most_likely = masked_prob.topk(seq_len // 5, sorted=False)
             selected = label.view(-1).gather(0, most_likely.indices)
             selected[selected < 0] = 0
             correct += selected.sum().long()
@@ -211,5 +214,8 @@ def contact_classification_forward_step(batch, model, input_tensor):
         averaged_loss = average_losses_across_data_parallel_group([loss])
         averaged_precision_at_l5 = average_losses_across_data_parallel_group([precision_at_l5])
 
-        return loss, {'lm loss': averaged_loss[0], 'precision_at_l5': averaged_precision_at_l5[0]}
+        args = get_args()
+        ratio = args.contact_prediction_ratio
+
+        return loss, {'lm loss': averaged_loss[0], f'precision_at L * {ratio}': averaged_precision_at_l5[0]}
     return output_tensor

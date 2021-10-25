@@ -49,6 +49,8 @@ def get_tasks_args(parser):
                        help='Use more difficult formulation of lambada.')
     group.add_argument('--skip-seq-longer-than', type=int, default=2176,
                        help='Skip sequence longer than a threshold')
+    group.add_argument('--contact_prediction_ratio', type=float, default=0.2,
+                       help='The prediction range ratio in contact prediction task with respect to sequence length L (ratio * L)')
     return parser
 
 
